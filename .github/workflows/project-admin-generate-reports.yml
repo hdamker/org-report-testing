@@ -62,6 +62,8 @@ jobs:
             // Helper function to get last activity date from multiple sources (only used if detailedActivity is true)
             async function getLastActivityDate(repo) {
               let lastActivity = new Date(repo.updated_at);
+              let activityLink = repo.html_url;
+              let activityType = 'repository';
               
               try {
                 // Check recent commits
@@ -72,7 +74,11 @@ jobs:
                 });
                 if (commits.data.length > 0) {
                   const commitDate = new Date(commits.data[0].commit.committer.date);
-                  if (commitDate > lastActivity) lastActivity = commitDate;
+                  if (commitDate > lastActivity) {
+                    lastActivity = commitDate;
+                    activityLink = commits.data[0].html_url;
+                    activityType = 'commit';
+                  }
                 }
                 
                 // Check recent issues
@@ -85,10 +91,14 @@ jobs:
                 });
                 if (issues.data.length > 0) {
                   const issueDate = new Date(issues.data[0].updated_at);
-                  if (issueDate > lastActivity) lastActivity = issueDate;
+                  if (issueDate > lastActivity) {
+                    lastActivity = issueDate;
+                    activityLink = issues.data[0].html_url;
+                    activityType = issues.data[0].pull_request ? 'pull_request' : 'issue';
+                  }
                 }
                 
-                // Check recent pull requests
+                // Check recent pull requests (in case issues API missed some)
                 const prs = await github.rest.pulls.list({
                   owner: org,
                   repo: repo.name,
@@ -98,13 +108,21 @@ jobs:
                 });
                 if (prs.data.length > 0) {
                   const prDate = new Date(prs.data[0].updated_at);
-                  if (prDate > lastActivity) lastActivity = prDate;
+                  if (prDate > lastActivity) {
+                    lastActivity = prDate;
+                    activityLink = prs.data[0].html_url;
+                    activityType = 'pull_request';
+                  }
                 }
               } catch (error) {
                 console.log(`Could not get detailed activity for ${repo.name}: ${error.message}`);
               }
               
-              return lastActivity;
+              return {
+                date: lastActivity,
+                link: activityLink,
+                type: activityType
+              };
             }
             
             // Get all repositories
@@ -183,9 +201,8 @@ jobs:
                 const openIssues = Math.max(0, (repo.open_issues_count || 0) - openPRs);
                 
                 // Get last activity date (only if detailed analysis is requested)
-                const lastActivity = detailedActivity ? 
-                  await getLastActivityDate(repo) : 
-                  new Date(repo.updated_at);
+                const detailedActivityInfo = detailedActivity ? await getLastActivityDate(repo) : null;
+                const lastActivity = detailedActivityInfo ? detailedActivityInfo.date : new Date(repo.updated_at);
                 
                 enrichedRepos.push({
                   ...repo,
@@ -193,7 +210,9 @@ jobs:
                   topics: topics.data.names,
                   open_issues_count: openIssues,
                   open_prs_count: openPRs,
-                  last_activity_date: lastActivity
+                  last_activity_date: lastActivity,
+                  detailed_activity: detailedActivityInfo, // Store detailed activity info
+                  simple_activity_date: new Date(repo.updated_at) // Always store simple date for comparison
                 });
                 
               } catch (error) {
@@ -205,7 +224,9 @@ jobs:
                   topics: [],
                   open_issues_count: repo.open_issues_count || 0,
                   open_prs_count: 0,
-                  last_activity_date: new Date(repo.updated_at)
+                  last_activity_date: new Date(repo.updated_at),
+                  detailed_activity: null,
+                  simple_activity_date: new Date(repo.updated_at)
                 });
               }
             }
@@ -263,6 +284,75 @@ jobs:
             report += `- **Incubating APIs**: ${typeStats['Incubating']}\n`;
             report += `- **Working Groups**: ${typeStats['Working Group']}\n`;
             report += `- **Other**: ${typeStats['Other']}\n\n`;
+            
+            // Activity Analysis Comparison (only if detailed analysis is enabled)
+            if (detailedActivity) {
+              report += `## Activity Date Comparison\n\n`;
+              report += `*Comparing GitHub's updated_at vs detailed activity analysis*\n\n`;
+              
+              // Calculate differences
+              const repositories = enrichedRepos.map(repo => {
+                const simpleDate = repo.simple_activity_date;
+                const detailedDate = repo.detailed_activity ? repo.detailed_activity.date : simpleDate;
+                const timeDiff = Math.abs(detailedDate - simpleDate) / (1000 * 60 * 60 * 24); // days
+                
+                return {
+                  name: repo.name,
+                  repo_type: repo.repo_type,
+                  html_url: repo.html_url,
+                  simple_date: simpleDate,
+                  detailed_date: detailedDate,
+                  detailed_link: repo.detailed_activity ? repo.detailed_activity.link : repo.html_url,
+                  activity_type: repo.detailed_activity ? repo.detailed_activity.type : 'repository',
+                  days_difference: timeDiff
+                };
+              });
+              
+              // Find repositories with significant differences (more than 1 day)
+              const significantDifferences = repositories.filter(r => r.days_difference > 1);
+              const identicalDates = repositories.filter(r => r.days_difference <= 1);
+              
+              report += `### Summary\n`;
+              report += `- **Repositories with identical/similar dates**: ${identicalDates.length}\n`;
+              report += `- **Repositories with significant differences (>1 day)**: ${significantDifferences.length}\n\n`;
+              
+              if (significantDifferences.length > 0) {
+                report += `### Repositories with Significant Date Differences\n\n`;
+                report += `| Repository | Type | GitHub Updated | Detailed Activity | Difference | Activity Type |\n`;
+                report += `|------------|------|----------------|-------------------|------------|---------------|\n`;
+                
+                // Sort by difference (largest first)
+                significantDifferences.sort((a, b) => b.days_difference - a.days_difference);
+                
+                for (const repo of significantDifferences.slice(0, 20)) { // Show top 20
+                  const simpleFormatted = repo.simple_date.toLocaleDateString();
+                  const detailedFormatted = repo.detailed_date.toLocaleDateString();
+                  const activityLink = `[${detailedFormatted}](${repo.detailed_link})`;
+                  const daysDiff = Math.round(repo.days_difference);
+                  
+                  report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${simpleFormatted} | ${activityLink} | ${daysDiff} days | ${repo.activity_type} |\n`;
+                }
+                
+                if (significantDifferences.length > 20) {
+                  report += `\n*Showing top 20 of ${significantDifferences.length} repositories with differences*\n`;
+                }
+                report += `\n`;
+              }
+              
+              // Sample of all repositories for comparison
+              report += `### Sample Activity Date Comparison (First 15 Repositories)\n\n`;
+              report += `| Repository | GitHub Updated | Detailed Activity | Activity Type |\n`;
+              report += `|------------|----------------|-------------------|---------------|\n`;
+              
+              for (const repo of repositories.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 15)) {
+                const simpleFormatted = repo.simple_date.toLocaleDateString();
+                const detailedFormatted = repo.detailed_date.toLocaleDateString();
+                const activityLink = `[${detailedFormatted}](${repo.detailed_link})`;
+                
+                report += `| [${repo.name}](${repo.html_url}) | ${simpleFormatted} | ${activityLink} | ${repo.activity_type} |\n`;
+              }
+              report += `\n`;
+            }
             
             // Repositories with least recent activity (only if detailed analysis is enabled)
             if (detailedActivity) {
