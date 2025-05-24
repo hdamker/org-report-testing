@@ -1,0 +1,326 @@
+name: Generate CAMARA Project Reports
+
+on:
+  workflow_dispatch:
+    inputs:
+      report_type:
+        description: 'Type of report to generate'
+        required: true
+        type: choice
+        options:
+          - 'repository-overview'
+          - 'workflow-status'
+          - 'api-releases'
+          - 'security-analysis'
+        default: 'repository-overview'
+      
+      include_archived:
+        description: 'Include archived repositories'
+        required: false
+        type: boolean
+        default: false
+
+  # schedule:
+    # Run weekly on Mondays at 08:15 UTC
+    # - cron: '15 8 * * 1'
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate Repository Overview Report
+        if: github.event.inputs.report_type == 'repository-overview' || github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const org = 'camaraproject';
+            const includeArchived = '${{ github.event.inputs.include_archived }}' === 'true';
+            
+            console.log(`Generating repository overview for ${org}`);
+            console.log(`Include archived: ${includeArchived}`);
+            
+            // Get all repositories
+            let allRepos = [];
+            let page = 1;
+            
+            while (true) {
+              const response = await github.rest.repos.listForOrg({
+                org: org,
+                type: 'all',
+                sort: 'name',
+                per_page: 100,
+                page: page
+              });
+              
+              if (response.data.length === 0) break;
+              allRepos = allRepos.concat(response.data);
+              page++;
+            }
+            
+            // Filter repositories
+            const filteredRepos = includeArchived ? allRepos : allRepos.filter(r => !r.archived);
+            
+            // Generate report
+            let report = `# CAMARA Project Repository Overview\n\n`;
+            report += `**Generated**: ${new Date().toISOString()}\n`;
+            report += `**Organization**: ${org}\n`;
+            report += `**Total Repositories**: ${filteredRepos.length}\n`;
+            if (!includeArchived) {
+              report += `**Archived Repositories Excluded**: ${allRepos.length - filteredRepos.length}\n`;
+            }
+            report += `\n`;
+            
+            // Statistics
+            const stats = {
+              total: filteredRepos.length,
+              public: filteredRepos.filter(r => !r.private).length,
+              private: filteredRepos.filter(r => r.private).length,
+              archived: filteredRepos.filter(r => r.archived).length,
+              forked: filteredRepos.filter(r => r.fork).length,
+              hasIssues: filteredRepos.filter(r => r.has_issues).length,
+              hasWiki: filteredRepos.filter(r => r.has_wiki).length,
+              languages: [...new Set(filteredRepos.map(r => r.language).filter(l => l))]
+            };
+            
+            report += `## Repository Statistics\n\n`;
+            report += `- **Total Repositories**: ${stats.total}\n`;
+            report += `- **Public**: ${stats.public}\n`;
+            report += `- **Private**: ${stats.private}\n`;
+            if (stats.archived > 0) report += `- **Archived**: ${stats.archived}\n`;
+            report += `- **Forked**: ${stats.forked}\n`;
+            report += `- **With Issues Enabled**: ${stats.hasIssues}\n`;
+            report += `- **With Wiki Enabled**: ${stats.hasWiki}\n`;
+            report += `- **Programming Languages**: ${stats.languages.length} (${stats.languages.join(', ')})\n\n`;
+            
+            // Top repositories by stars
+            const topStarred = filteredRepos
+              .sort((a, b) => b.stargazers_count - a.stargazers_count)
+              .slice(0, 10)
+              .filter(r => r.stargazers_count > 0);
+            
+            if (topStarred.length > 0) {
+              report += `## Top Repositories by Stars\n\n`;
+              report += `| Repository | Stars | Language | Last Updated |\n`;
+              report += `|------------|-------|----------|-------------|\n`;
+              
+              for (const repo of topStarred) {
+                const language = repo.language || 'N/A';
+                const lastUpdated = new Date(repo.updated_at).toLocaleDateString();
+                report += `| [${repo.name}](${repo.html_url}) | ${repo.stargazers_count} | ${language} | ${lastUpdated} |\n`;
+              }
+              report += `\n`;
+            }
+            
+            // Recent activity
+            const recentlyUpdated = filteredRepos
+              .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+              .slice(0, 15);
+            
+            report += `## Recently Updated Repositories\n\n`;
+            report += `| Repository | Visibility | Language | Stars | Last Updated |\n`;
+            report += `|------------|------------|----------|-------|-------------|\n`;
+            
+            for (const repo of recentlyUpdated) {
+              const visibility = repo.private ? 'Private' : 'Public';
+              const stars = repo.stargazers_count;
+              const language = repo.language || 'N/A';
+              const lastUpdated = new Date(repo.updated_at).toLocaleDateString();
+              const isArchived = repo.archived ? ' (Archived)' : '';
+              
+              report += `| [${repo.name}](${repo.html_url})${isArchived} | ${visibility} | ${language} | ${stars} | ${lastUpdated} |\n`;
+            }
+            
+            // Complete repository list
+            report += `\n## Complete Repository List\n\n`;
+            report += `| Repository | Type | Visibility | Stars | Language | Last Updated |\n`;
+            report += `|------------|------|------------|-------|----------|-------------|\n`;
+            
+            for (const repo of filteredRepos.sort((a, b) => a.name.localeCompare(b.name))) {
+              const type = repo.fork ? 'Fork' : 'Source';
+              const visibility = repo.private ? 'Private' : 'Public';
+              const stars = repo.stargazers_count;
+              const language = repo.language || 'N/A';
+              const lastUpdated = new Date(repo.updated_at).toLocaleDateString();
+              const isArchived = repo.archived ? ' 📦' : '';
+              
+              report += `| [${repo.name}](${repo.html_url})${isArchived} | ${type} | ${visibility} | ${stars} | ${language} | ${lastUpdated} |\n`;
+            }
+            
+            // Save report
+            const fs = require('fs');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `camara-repository-overview-${timestamp.split('T')[0]}.md`;
+            fs.writeFileSync(filename, report);
+            
+            console.log(`Report saved as ${filename}`);
+            
+            // Set output for artifact upload
+            core.setOutput('report_filename', filename);
+            
+            // Add to job summary (truncated version)
+            const shortSummary = report.split('\n').slice(0, 50).join('\n') + '\n\n*Full report available in artifacts*';
+            core.summary.addRaw(shortSummary);
+            await core.summary.write();
+
+      - name: Generate API Releases Report
+        if: github.event.inputs.report_type == 'api-releases'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const org = 'camaraproject';
+            
+            console.log(`Generating API releases report for ${org}`);
+            
+            // Get repositories with releases
+            const response = await github.rest.repos.listForOrg({
+              org: org,
+              type: 'all',
+              per_page: 100
+            });
+            
+            const repos = response.data.filter(r => !r.archived);
+            
+            const repoReleases = [];
+            
+            for (const repo of repos) {
+              try {
+                const releases = await github.rest.repos.listReleases({
+                  owner: org,
+                  repo: repo.name,
+                  per_page: 5
+                });
+                
+                if (releases.data.length > 0) {
+                  repoReleases.push({
+                    name: repo.name,
+                    html_url: repo.html_url,
+                    releases: releases.data.map(r => ({
+                      tag_name: r.tag_name,
+                      name: r.name,
+                      published_at: r.published_at,
+                      prerelease: r.prerelease,
+                      html_url: r.html_url
+                    }))
+                  });
+                }
+              } catch (error) {
+                console.log(`Could not fetch releases for ${repo.name}: ${error.message}`);
+              }
+            }
+            
+            // Generate report
+            let report = `# CAMARA Project API Releases\n\n`;
+            report += `**Generated**: ${new Date().toISOString()}\n`;
+            report += `**Repositories with Releases**: ${repoReleases.length}\n\n`;
+            
+            // Recent releases across all repos
+            const allReleases = [];
+            repoReleases.forEach(repo => {
+              repo.releases.forEach(release => {
+                allReleases.push({
+                  repo: repo.name,
+                  repo_url: repo.html_url,
+                  ...release
+                });
+              });
+            });
+            
+            const recentReleases = allReleases
+              .sort((a, b) => new Date(b.published_at) - new Date(a.published_at))
+              .slice(0, 20);
+            
+            report += `## Recent Releases (Last 20)\n\n`;
+            report += `| Repository | Release | Version | Date | Type |\n`;
+            report += `|------------|---------|---------|------|\------|\n`;
+            
+            for (const release of recentReleases) {
+              const date = new Date(release.published_at).toLocaleDateString();
+              const type = release.prerelease ? 'Pre-release' : 'Release';
+              const name = release.name || release.tag_name;
+              
+              report += `| [${release.repo}](${release.repo_url}) | [${name}](${release.html_url}) | ${release.tag_name} | ${date} | ${type} |\n`;
+            }
+            
+            report += `\n## Releases by Repository\n\n`;
+            
+            for (const repo of repoReleases.sort((a, b) => a.name.localeCompare(b.name))) {
+              report += `### [${repo.name}](${repo.html_url})\n\n`;
+              
+              for (const release of repo.releases) {
+                const date = new Date(release.published_at).toLocaleDateString();
+                const type = release.prerelease ? ' (Pre-release)' : '';
+                const name = release.name || release.tag_name;
+                
+                report += `- [${name}](${release.html_url}) - ${release.tag_name} - ${date}${type}\n`;
+              }
+              report += `\n`;
+            }
+            
+            // Save report
+            const fs = require('fs');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `camara-api-releases-${timestamp.split('T')[0]}.md`;
+            fs.writeFileSync(filename, report);
+            
+            console.log(`API releases report saved as ${filename}`);
+            core.setOutput('report_filename', filename);
+            
+            // Add to job summary
+            const shortSummary = report.split('\n').slice(0, 30).join('\n') + '\n\n*Full report available in artifacts*';
+            core.summary.addRaw(shortSummary);
+            await core.summary.write();
+
+      - name: Generate Workflow Status Report
+        if: github.event.inputs.report_type == 'workflow-status'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const org = 'camaraproject';
+            
+            console.log(`Generating workflow status report for ${org}`);
+            
+            // This is a basic implementation - you might want to enhance it
+            let report = `# CAMARA Project Workflow Status\n\n`;
+            report += `**Generated**: ${new Date().toISOString()}\n`;
+            report += `**Note**: This is a basic workflow status report. `;
+            report += `For detailed workflow analysis, consider using GitHub's API with pagination.\n\n`;
+            
+            report += `## Workflow Analysis\n\n`;
+            report += `To get detailed workflow status:\n`;
+            report += `1. Use GitHub's REST API to fetch workflow runs\n`;
+            report += `2. Analyze success/failure rates\n`;
+            report += `3. Identify repositories with failing workflows\n`;
+            report += `4. Generate alerts for critical failures\n\n`;
+            
+            report += `This report type can be enhanced with specific workflow monitoring requirements.\n`;
+            
+            // Save report
+            const fs = require('fs');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = `camara-workflow-status-${timestamp.split('T')[0]}.md`;
+            fs.writeFileSync(filename, report);
+            
+            core.setOutput('report_filename', filename);
+            
+            core.summary.addRaw(report);
+            await core.summary.write();
+
+      - name: Upload Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: camara-project-report-${{ github.event.inputs.report_type || 'repository-overview' }}-${{ github.run_number }}
+          path: '*.md'
+          retention-days: 90
+
+      - name: Final Summary
+        run: |
+          echo "## Report Generation Complete" >> $GITHUB_STEP_SUMMARY
+          echo "**Report Type**: ${{ github.event.inputs.report_type || 'repository-overview' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Generated At**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Download**: Check the artifacts section of this workflow run" >> $GITHUB_STEP_SUMMARY
