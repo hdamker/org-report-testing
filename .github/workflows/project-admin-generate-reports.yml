@@ -19,10 +19,16 @@ on:
         required: false
         type: boolean
         default: false
+      
+      detailed_activity:
+        description: 'Include detailed activity analysis (slower but more accurate)'
+        required: false
+        type: boolean
+        default: false
 
-  # schedule:
-    # Run weekly on Mondays at 08:15 UTC
-    # - cron: '15 8 * * 1'
+  schedule:
+    # Run weekly on Mondays at 07:35 UTC
+    - cron: '35 7 * * 1'
 
 jobs:
   generate-report:
@@ -39,9 +45,67 @@ jobs:
           script: |
             const org = 'camaraproject';
             const includeArchived = '${{ github.event.inputs.include_archived }}' === 'true';
+            const detailedActivity = '${{ github.event.inputs.detailed_activity }}' === 'true';
             
             console.log(`Generating repository overview for ${org}`);
             console.log(`Include archived: ${includeArchived}`);
+            console.log(`Detailed activity analysis: ${detailedActivity}`);
+            
+            // Helper function to determine repository type based on topics
+            function getRepositoryType(topics) {
+              if (topics.includes('sandbox-api-repository')) return 'Sandbox';
+              if (topics.includes('incubating-api-repository')) return 'Incubating';
+              if (topics.includes('workinggroup')) return 'Working Group';
+              return 'Other';
+            }
+            
+            // Helper function to get last activity date from multiple sources (only used if detailedActivity is true)
+            async function getLastActivityDate(repo) {
+              let lastActivity = new Date(repo.updated_at);
+              
+              try {
+                // Check recent commits
+                const commits = await github.rest.repos.listCommits({
+                  owner: org,
+                  repo: repo.name,
+                  per_page: 1
+                });
+                if (commits.data.length > 0) {
+                  const commitDate = new Date(commits.data[0].commit.committer.date);
+                  if (commitDate > lastActivity) lastActivity = commitDate;
+                }
+                
+                // Check recent issues
+                const issues = await github.rest.issues.listForRepo({
+                  owner: org,
+                  repo: repo.name,
+                  state: 'all',
+                  sort: 'updated',
+                  per_page: 1
+                });
+                if (issues.data.length > 0) {
+                  const issueDate = new Date(issues.data[0].updated_at);
+                  if (issueDate > lastActivity) lastActivity = issueDate;
+                }
+                
+                // Check recent pull requests
+                const prs = await github.rest.pulls.list({
+                  owner: org,
+                  repo: repo.name,
+                  state: 'all',
+                  sort: 'updated',
+                  per_page: 1
+                });
+                if (prs.data.length > 0) {
+                  const prDate = new Date(prs.data[0].updated_at);
+                  if (prDate > lastActivity) lastActivity = prDate;
+                }
+              } catch (error) {
+                console.log(`Could not get detailed activity for ${repo.name}: ${error.message}`);
+              }
+              
+              return lastActivity;
+            }
             
             // Get all repositories
             let allRepos = [];
@@ -64,29 +128,114 @@ jobs:
             // Filter repositories
             const filteredRepos = includeArchived ? allRepos : allRepos.filter(r => !r.archived);
             
+            console.log(`Processing ${filteredRepos.length} repositories for information...`);
+            if (detailedActivity) {
+              console.log('⚠️ Detailed activity analysis enabled - this will take longer but provide more accurate activity dates');
+            }
+            
+            // Enrich repository data with additional information
+            const enrichedRepos = [];
+            for (let i = 0; i < filteredRepos.length; i++) {
+              const repo = filteredRepos[i];
+              console.log(`Processing ${i + 1}/${filteredRepos.length}: ${repo.name}`);
+              
+              try {
+                // Get repository topics
+                const topics = await github.rest.repos.getAllTopics({
+                  owner: org,
+                  repo: repo.name
+                });
+                
+                // Get open issues and PRs count
+                const [openIssues, openPRs] = await Promise.all([
+                  github.rest.issues.listForRepo({
+                    owner: org,
+                    repo: repo.name,
+                    state: 'open',
+                    per_page: 1
+                  }).then(response => response.data.length > 0 ? 
+                    github.rest.search.issuesAndPullRequests({
+                      q: `repo:${org}/${repo.name} is:open is:issue`
+                    }).then(searchResponse => searchResponse.data.total_count) : 0
+                  ).catch(() => repo.open_issues_count || 0),
+                  
+                  github.rest.pulls.list({
+                    owner: org,
+                    repo: repo.name,
+                    state: 'open',
+                    per_page: 1
+                  }).then(response => response.data.length > 0 ?
+                    github.rest.search.issuesAndPullRequests({
+                      q: `repo:${org}/${repo.name} is:open is:pr`
+                    }).then(searchResponse => searchResponse.data.total_count) : 0
+                  ).catch(() => 0)
+                ]);
+                
+                // Get last activity date (only if detailed analysis is requested)
+                const lastActivity = detailedActivity ? 
+                  await getLastActivityDate(repo) : 
+                  new Date(repo.updated_at);
+                
+                enrichedRepos.push({
+                  ...repo,
+                  repo_type: getRepositoryType(topics.data.names),
+                  topics: topics.data.names,
+                  open_issues_count: openIssues,
+                  open_prs_count: openPRs,
+                  last_activity_date: lastActivity
+                });
+                
+              } catch (error) {
+                console.log(`Error processing ${repo.name}: ${error.message}`);
+                // Add with minimal data if API calls fail
+                enrichedRepos.push({
+                  ...repo,
+                  repo_type: 'Other',
+                  topics: [],
+                  open_issues_count: repo.open_issues_count || 0,
+                  open_prs_count: 0,
+                  last_activity_date: new Date(repo.updated_at)
+                });
+              }
+            }
+            
+            console.log('Repository processing complete. Generating report...');
+            
             // Generate report
             let report = `# CAMARA Project Repository Overview\n\n`;
             report += `**Generated**: ${new Date().toISOString()}\n`;
             report += `**Organization**: ${org}\n`;
-            report += `**Total Repositories**: ${filteredRepos.length}\n`;
+            report += `**Total Repositories**: ${enrichedRepos.length}\n`;
             if (!includeArchived) {
-              report += `**Archived Repositories Excluded**: ${allRepos.length - filteredRepos.length}\n`;
+              report += `**Archived Repositories Excluded**: ${allRepos.length - enrichedRepos.length}\n`;
             }
+            report += `**Detailed Activity Analysis**: ${detailedActivity ? 'Enabled' : 'Disabled (using repository updated_at)'}\n`;
             report += `\n`;
             
-            // Statistics
+            // Repository type statistics
+            const typeStats = {
+              'Sandbox': enrichedRepos.filter(r => r.repo_type === 'Sandbox').length,
+              'Incubating': enrichedRepos.filter(r => r.repo_type === 'Incubating').length,
+              'Working Group': enrichedRepos.filter(r => r.repo_type === 'Working Group').length,
+              'Other': enrichedRepos.filter(r => r.repo_type === 'Other').length
+            };
+            
+            // General statistics
             const stats = {
-              total: filteredRepos.length,
-              public: filteredRepos.filter(r => !r.private).length,
-              private: filteredRepos.filter(r => r.private).length,
-              archived: filteredRepos.filter(r => r.archived).length,
-              forked: filteredRepos.filter(r => r.fork).length,
-              hasIssues: filteredRepos.filter(r => r.has_issues).length,
-              hasWiki: filteredRepos.filter(r => r.has_wiki).length,
-              languages: [...new Set(filteredRepos.map(r => r.language).filter(l => l))]
+              total: enrichedRepos.length,
+              public: enrichedRepos.filter(r => !r.private).length,
+              private: enrichedRepos.filter(r => r.private).length,
+              archived: enrichedRepos.filter(r => r.archived).length,
+              forked: enrichedRepos.filter(r => r.fork).length,
+              hasIssues: enrichedRepos.filter(r => r.has_issues).length,
+              hasWiki: enrichedRepos.filter(r => r.has_wiki).length,
+              languages: [...new Set(enrichedRepos.map(r => r.language).filter(l => l))],
+              totalOpenIssues: enrichedRepos.reduce((acc, r) => acc + r.open_issues_count, 0),
+              totalOpenPRs: enrichedRepos.reduce((acc, r) => acc + r.open_prs_count, 0)
             };
             
             report += `## Repository Statistics\n\n`;
+            report += `### General Statistics\n`;
             report += `- **Total Repositories**: ${stats.total}\n`;
             report += `- **Public**: ${stats.public}\n`;
             report += `- **Private**: ${stats.private}\n`;
@@ -94,60 +243,105 @@ jobs:
             report += `- **Forked**: ${stats.forked}\n`;
             report += `- **With Issues Enabled**: ${stats.hasIssues}\n`;
             report += `- **With Wiki Enabled**: ${stats.hasWiki}\n`;
-            report += `- **Programming Languages**: ${stats.languages.length} (${stats.languages.join(', ')})\n\n`;
+            report += `- **Programming Languages**: ${stats.languages.length} (${stats.languages.join(', ')})\n`;
+            report += `- **Total Open Issues**: ${stats.totalOpenIssues}\n`;
+            report += `- **Total Open Pull Requests**: ${stats.totalOpenPRs}\n\n`;
+            
+            report += `### Repository Types\n`;
+            report += `- **Sandbox APIs**: ${typeStats['Sandbox']}\n`;
+            report += `- **Incubating APIs**: ${typeStats['Incubating']}\n`;
+            report += `- **Working Groups**: ${typeStats['Working Group']}\n`;
+            report += `- **Other**: ${typeStats['Other']}\n\n`;
+            
+            // Repositories with least recent activity (only if detailed analysis is enabled)
+            if (detailedActivity) {
+              const leastActiveRepos = enrichedRepos
+                .sort((a, b) => new Date(a.last_activity_date) - new Date(b.last_activity_date))
+                .slice(0, 10);
+              
+              report += `## Repositories with Least Recent Activity\n\n`;
+              report += `*Based on detailed analysis of commits, issues, PRs, and comments*\n\n`;
+              report += `| Repository | Type | Last Activity | Open Issues | Open PRs | Language |\n`;
+              report += `|------------|------|---------------|-------------|----------|----------|\n`;
+              
+              for (const repo of leastActiveRepos) {
+                const lastActivity = new Date(repo.last_activity_date).toLocaleDateString();
+                const language = repo.language || 'N/A';
+                const isArchived = repo.archived ? ' 📦' : '';
+                
+                report += `| [${repo.name}](${repo.html_url})${isArchived} | ${repo.repo_type} | ${lastActivity} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${language} |\n`;
+              }
+              report += `\n`;
+            }
             
             // Top repositories by stars
-            const topStarred = filteredRepos
+            const topStarred = enrichedRepos
               .sort((a, b) => b.stargazers_count - a.stargazers_count)
               .slice(0, 10)
               .filter(r => r.stargazers_count > 0);
             
             if (topStarred.length > 0) {
               report += `## Top Repositories by Stars\n\n`;
-              report += `| Repository | Stars | Language | Last Updated |\n`;
-              report += `|------------|-------|----------|-------------|\n`;
+              report += `| Repository | Type | Stars | Language | Open Issues | Open PRs |\n`;
+              report += `|------------|------|-------|----------|-------------|----------|\n`;
               
               for (const repo of topStarred) {
                 const language = repo.language || 'N/A';
-                const lastUpdated = new Date(repo.updated_at).toLocaleDateString();
-                report += `| [${repo.name}](${repo.html_url}) | ${repo.stargazers_count} | ${language} | ${lastUpdated} |\n`;
+                
+                report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${repo.stargazers_count} | ${language} | ${repo.open_issues_count} | ${repo.open_prs_count} |\n`;
               }
               report += `\n`;
             }
             
-            // Recent activity
-            const recentlyUpdated = filteredRepos
-              .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+            // Recent activity (using the activity date available)
+            const recentlyActive = enrichedRepos
+              .sort((a, b) => new Date(b.last_activity_date) - new Date(a.last_activity_date))
               .slice(0, 15);
             
-            report += `## Recently Updated Repositories\n\n`;
-            report += `| Repository | Visibility | Language | Stars | Last Updated |\n`;
-            report += `|------------|------------|----------|-------|-------------|\n`;
+            const activityTitle = detailedActivity ? 'Most Recently Active Repositories' : 'Recently Updated Repositories';
+            const activityNote = detailedActivity ? '*Based on detailed activity analysis*' : '*Based on repository updated_at timestamp*';
             
-            for (const repo of recentlyUpdated) {
-              const visibility = repo.private ? 'Private' : 'Public';
-              const stars = repo.stargazers_count;
+            report += `## ${activityTitle}\n\n`;
+            report += `${activityNote}\n\n`;
+            report += `| Repository | Type | Last Activity | Open Issues | Open PRs | Language |\n`;
+            report += `|------------|------|---------------|-------------|----------|----------|\n`;
+            
+            for (const repo of recentlyActive) {
+              const lastActivity = new Date(repo.last_activity_date).toLocaleDateString();
               const language = repo.language || 'N/A';
-              const lastUpdated = new Date(repo.updated_at).toLocaleDateString();
-              const isArchived = repo.archived ? ' (Archived)' : '';
-              
-              report += `| [${repo.name}](${repo.html_url})${isArchived} | ${visibility} | ${language} | ${stars} | ${lastUpdated} |\n`;
-            }
-            
-            // Complete repository list
-            report += `\n## Complete Repository List\n\n`;
-            report += `| Repository | Type | Visibility | Stars | Language | Last Updated |\n`;
-            report += `|------------|------|------------|-------|----------|-------------|\n`;
-            
-            for (const repo of filteredRepos.sort((a, b) => a.name.localeCompare(b.name))) {
-              const type = repo.fork ? 'Fork' : 'Source';
-              const visibility = repo.private ? 'Private' : 'Public';
-              const stars = repo.stargazers_count;
-              const language = repo.language || 'N/A';
-              const lastUpdated = new Date(repo.updated_at).toLocaleDateString();
               const isArchived = repo.archived ? ' 📦' : '';
               
-              report += `| [${repo.name}](${repo.html_url})${isArchived} | ${type} | ${visibility} | ${stars} | ${language} | ${lastUpdated} |\n`;
+              report += `| [${repo.name}](${repo.html_url})${isArchived} | ${repo.repo_type} | ${lastActivity} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${language} |\n`;
+            }
+            report += `\n`;
+            
+            // Complete repository list grouped by type
+            const reposByType = {
+              'Sandbox': enrichedRepos.filter(r => r.repo_type === 'Sandbox').sort((a, b) => a.name.localeCompare(b.name)),
+              'Incubating': enrichedRepos.filter(r => r.repo_type === 'Incubating').sort((a, b) => a.name.localeCompare(b.name)),
+              'Working Group': enrichedRepos.filter(r => r.repo_type === 'Working Group').sort((a, b) => a.name.localeCompare(b.name)),
+              'Other': enrichedRepos.filter(r => r.repo_type === 'Other').sort((a, b) => a.name.localeCompare(b.name))
+            };
+            
+            report += `## Complete Repository List by Type\n\n`;
+            
+            for (const [type, repos] of Object.entries(reposByType)) {
+              if (repos.length === 0) continue;
+              
+              report += `### ${type} Repositories (${repos.length})\n\n`;
+              report += `| Repository | Visibility | Stars | Language | Open Issues | Open PRs | Last Activity |\n`;
+              report += `|------------|------------|-------|----------|-------------|----------|---------------|\n`;
+              
+              for (const repo of repos) {
+                const visibility = repo.private ? 'Private' : 'Public';
+                const stars = repo.stargazers_count;
+                const language = repo.language || 'N/A';
+                const lastActivity = new Date(repo.last_activity_date).toLocaleDateString();
+                const isArchived = repo.archived ? ' 📦' : '';
+                
+                report += `| [${repo.name}](${repo.html_url})${isArchived} | ${visibility} | ${stars} | ${language} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${lastActivity} |\n`;
+              }
+              report += `\n`;
             }
             
             // Save report
@@ -162,7 +356,7 @@ jobs:
             core.setOutput('report_filename', filename);
             
             // Add to job summary (truncated version)
-            const shortSummary = report.split('\n').slice(0, 50).join('\n') + '\n\n*Full report available in artifacts*';
+            const shortSummary = report.split('\n').slice(0, 80).join('\n') + '\n\n*Full report available in artifacts*';
             core.summary.addRaw(shortSummary);
             await core.summary.write();
 
