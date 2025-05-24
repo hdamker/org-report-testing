@@ -133,6 +133,36 @@ jobs:
               console.log('⚠️ Detailed activity analysis enabled - this will take longer but provide more accurate activity dates');
             }
             
+            // Helper function to check if repository has wiki content
+            async function checkWikiContent(repo) {
+              if (!repo.has_wiki) return { hasWiki: false, hasContent: false, pageCount: 0 };
+              
+              try {
+                // Try to get wiki pages - this endpoint may not always be available
+                const wikiPages = await github.rest.request('GET /repos/{owner}/{repo}/wiki', {
+                  owner: org,
+                  repo: repo.name
+                });
+                
+                return {
+                  hasWiki: true,
+                  hasContent: wikiPages.data && wikiPages.data.length > 0,
+                  pageCount: wikiPages.data ? wikiPages.data.length : 0
+                };
+              } catch (error) {
+                // If wiki API is not available, we'll check differently
+                // We can infer usage from the repository's wiki being enabled + updated recently
+                const recentlyUpdated = new Date(repo.updated_at) > new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // 90 days
+                
+                return {
+                  hasWiki: true,
+                  hasContent: null, // Unknown - API not accessible
+                  pageCount: null,
+                  recentlyUpdated: recentlyUpdated
+                };
+              }
+            }
+            
             // Enrich repository data with additional information
             const enrichedRepos = [];
             for (let i = 0; i < filteredRepos.length; i++) {
@@ -176,13 +206,17 @@ jobs:
                   await getLastActivityDate(repo) : 
                   new Date(repo.updated_at);
                 
+                // Check wiki content
+                const wikiInfo = await checkWikiContent(repo);
+                
                 enrichedRepos.push({
                   ...repo,
                   repo_type: getRepositoryType(topics.data.names),
                   topics: topics.data.names,
                   open_issues_count: openIssues,
                   open_prs_count: openPRs,
-                  last_activity_date: lastActivity
+                  last_activity_date: lastActivity,
+                  wiki_info: wikiInfo
                 });
                 
               } catch (error) {
@@ -194,7 +228,8 @@ jobs:
                   topics: [],
                   open_issues_count: repo.open_issues_count || 0,
                   open_prs_count: 0,
-                  last_activity_date: new Date(repo.updated_at)
+                  last_activity_date: new Date(repo.updated_at),
+                  wiki_info: { hasWiki: repo.has_wiki, hasContent: null, pageCount: null }
                 });
               }
             }
@@ -229,6 +264,8 @@ jobs:
               forked: enrichedRepos.filter(r => r.fork).length,
               hasIssues: enrichedRepos.filter(r => r.has_issues).length,
               hasWiki: enrichedRepos.filter(r => r.has_wiki).length,
+              wikiWithContent: enrichedRepos.filter(r => r.wiki_info.hasContent === true).length,
+              wikiUnknownContent: enrichedRepos.filter(r => r.wiki_info.hasContent === null && r.wiki_info.hasWiki).length,
               languages: [...new Set(enrichedRepos.map(r => r.language).filter(l => l))],
               totalOpenIssues: enrichedRepos.reduce((acc, r) => acc + r.open_issues_count, 0),
               totalOpenPRs: enrichedRepos.reduce((acc, r) => acc + r.open_prs_count, 0)
@@ -252,6 +289,69 @@ jobs:
             report += `- **Incubating APIs**: ${typeStats['Incubating']}\n`;
             report += `- **Working Groups**: ${typeStats['Working Group']}\n`;
             report += `- **Other**: ${typeStats['Other']}\n\n`;
+            
+            // Wiki Analysis
+            const wikiEnabledRepos = enrichedRepos.filter(r => r.wiki_info.hasWiki);
+            const wikiWithContent = enrichedRepos.filter(r => r.wiki_info.hasContent === true);
+            const wikiEmptyOrUnknown = wikiEnabledRepos.filter(r => r.wiki_info.hasContent !== true);
+            
+            report += `### Wiki Analysis\n`;
+            report += `- **Repositories with Wiki Enabled**: ${stats.hasWiki}\n`;
+            report += `- **Repositories with Wiki Content**: ${stats.wikiWithContent}\n`;
+            report += `- **Repositories with Wiki Enabled but Unknown/No Content**: ${wikiEmptyOrUnknown.length}\n`;
+            report += `- **Repositories without Wiki**: ${stats.total - stats.hasWiki}\n\n`;
+            
+            // Detailed wiki breakdown
+            if (wikiEnabledRepos.length > 0) {
+              report += `## Wiki Usage Analysis\n\n`;
+              report += `*This analysis helps identify which repositories can safely have wiki disabled*\n\n`;
+              
+              if (wikiWithContent.length > 0) {
+                report += `### Repositories with Wiki Content (${wikiWithContent.length})\n`;
+                report += `*⚠️ Review these before disabling wiki - they contain content*\n\n`;
+                report += `| Repository | Type | Pages | Language |\n`;
+                report += `|------------|------|-------|----------|\n`;
+                
+                for (const repo of wikiWithContent.sort((a, b) => a.name.localeCompare(b.name))) {
+                  const language = repo.language || 'N/A';
+                  const pageCount = repo.wiki_info.pageCount || 'Multiple';
+                  
+                  report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${pageCount} | ${language} |\n`;
+                }
+                report += `\n`;
+              }
+              
+              if (wikiEmptyOrUnknown.length > 0) {
+                report += `### Repositories with Wiki Enabled but Empty/Unknown Content (${wikiEmptyOrUnknown.length})\n`;
+                report += `*✅ These can likely have wiki safely disabled*\n\n`;
+                report += `| Repository | Type | Status | Last Updated | Language |\n`;
+                report += `|------------|------|--------|--------------|----------|\n`;
+                
+                for (const repo of wikiEmptyOrUnknown.sort((a, b) => a.name.localeCompare(b.name))) {
+                  const language = repo.language || 'N/A';
+                  const lastUpdated = new Date(repo.updated_at).toLocaleDateString();
+                  const status = repo.wiki_info.hasContent === false ? 'Empty' : 'Unknown';
+                  
+                  report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${status} | ${lastUpdated} | ${language} |\n`;
+                }
+                report += `\n`;
+              }
+              
+              // Summary for bulk operations
+              report += `### Wiki Disable Recommendations\n\n`;
+              report += `- **Safe to disable**: ${wikiEmptyOrUnknown.length} repositories with empty/unknown wiki content\n`;
+              report += `- **Review before disabling**: ${wikiWithContent.length} repositories with wiki content\n`;
+              report += `- **Already disabled**: ${stats.total - stats.hasWiki} repositories\n\n`;
+              
+              if (wikiEmptyOrUnknown.length > 0) {
+                report += `#### Repository names for bulk wiki disable:\n`;
+                report += `\`\`\`\n`;
+                for (const repo of wikiEmptyOrUnknown.sort((a, b) => a.name.localeCompare(b.name))) {
+                  report += `${repo.name}\n`;
+                }
+                report += `\`\`\`\n\n`;
+              }
+            }
             
             // Repositories with least recent activity (only if detailed analysis is enabled)
             if (detailedActivity) {
@@ -317,9 +417,9 @@ jobs:
             
             // Complete repository list grouped by type
             const reposByType = {
-              'Sandbox': enrichedRepos.filter(r => r.repo_type === 'Sandbox').sort((a, b) => a.name.localeCompare(b.name)),
-              'Incubating': enrichedRepos.filter(r => r.repo_type === 'Incubating').sort((a, b) => a.name.localeCompare(b.name)),
               'Working Group': enrichedRepos.filter(r => r.repo_type === 'Working Group').sort((a, b) => a.name.localeCompare(b.name)),
+              'Incubating': enrichedRepos.filter(r => r.repo_type === 'Incubating').sort((a, b) => a.name.localeCompare(b.name)),
+              'Sandbox': enrichedRepos.filter(r => r.repo_type === 'Sandbox').sort((a, b) => a.name.localeCompare(b.name)),
               'Other': enrichedRepos.filter(r => r.repo_type === 'Other').sort((a, b) => a.name.localeCompare(b.name))
             };
             
