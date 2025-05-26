@@ -10,7 +10,6 @@ on:
         options:
           - 'repository-overview'
           - 'api-releases'
-          - 'security-analysis'
         default: 'repository-overview'
       
       include_archived:
@@ -36,7 +35,7 @@ jobs:
       repository_groups: ${{ steps.get-api-repos.outputs.repository_groups }}
       total_repos: ${{ steps.get-api-repos.outputs.total_repos }}
       total_groups: ${{ steps.get-api-repos.outputs.total_groups }}
-      report_filename: ${{ steps.generate-overview.outputs.report_filename || steps.generate-security.outputs.report_filename }}
+      report_filename: ${{ steps.generate-overview.outputs.report_filename }}
     steps:
       - name: Generate Repository Overview Report
         if: github.event.inputs.report_type == 'repository-overview' || github.event_name == 'schedule'
@@ -610,51 +609,9 @@ jobs:
             echo "✅ repository_groups output is set"
           fi
 
-      - name: Generate Security Analysis Report
-        if: github.event.inputs.report_type == 'security-analysis'
-        id: generate-security
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
-          script: |
-            const org = 'camaraproject';
-            
-            console.log(`🚀 Starting security analysis report for ${org}`);
-            console.log(`📅 Report generation started at: ${new Date().toISOString()}`);
-            
-            // This is a basic implementation - you might want to enhance it
-            let report = `# CAMARA Project Security Analysis\n\n`;
-            report += `**Generated**: ${new Date().toISOString()}\n`;
-            report += `**Note**: This is a basic security analysis report. `;
-            report += `For detailed security analysis, consider using GitHub's Security API.\n\n`;
-            
-            report += `## Security Analysis\n\n`;
-            report += `To get detailed security analysis:\n`;
-            report += `1. Use GitHub's REST API to fetch security alerts\n`;
-            report += `2. Analyze dependency vulnerabilities\n`;
-            report += `3. Check for security policies and workflows\n`;
-            report += `4. Generate alerts for critical security issues\n\n`;
-            
-            report += `This report type can be enhanced with specific security monitoring requirements.\n`;
-            
-            console.log(`💾 Saving basic security analysis report...`);
-            // Save report
-            const fs = require('fs');
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const filename = `camara-security-analysis-${timestamp.split('T')[0]}.md`;
-            fs.writeFileSync(filename, report);
-            
-            console.log(`✅ Security analysis report saved as ${filename}`);
-            core.setOutput('report_filename', filename);
-            
-            core.summary.addRaw(report);
-            await core.summary.write();
-            
-            console.log(`🎉 Security analysis report generation completed!`);
-
-      # NEW: Upload artifact for repository-overview and security-analysis reports
-      - name: Upload Repository Overview and Security Analysis Reports
-        if: github.event.inputs.report_type == 'repository-overview' || github.event_name == 'schedule' || github.event.inputs.report_type == 'security-analysis'
+      # NEW: Upload artifact for repository-overview reports
+      - name: Upload Repository Overview Reports
+        if: github.event.inputs.report_type == 'repository-overview' || github.event_name == 'schedule'
         uses: actions/upload-artifact@v4
         with:
           name: camara-project-report-${{ github.event.inputs.report_type || 'repository-overview' }}-${{ github.run_number }}
@@ -686,14 +643,7 @@ jobs:
             console.log(`🚀 Starting analysis for Group ${groupId}`);
             console.log(`📦 Processing ${repositories.length} repositories: ${repositories.map(r => r.name).join(', ')}`);
             
-            // Meta-release configuration
-            const metaReleaseDates = {
-              'Fall24': new Date('2024-09-15'),
-              'Spring25': new Date('2025-03-15'),
-              'Fall25': new Date('2025-09-15')
-            };
-            
-            // Helper functions (same as before but with better error handling)
+            // Helper functions for API calls and meta-release determination
             function delay(ms) {
               return new Promise(resolve => setTimeout(resolve, ms));
             }
@@ -714,26 +664,104 @@ jobs:
               }
             }
             
-            function determineMetaRelease(repoName, releaseTag, releaseDate) {
-              const tagMatch = releaseTag.match(/^r(\d+)\.(\d+)$/);
-              if (!tagMatch) return { cycle: 'Unknown', confidence: 'low', reason: 'Invalid tag format' };
+            // Helper function to determine meta-releases for all releases in a repository
+            function determineMetaReleases(releases) {
+              // First, parse and group releases by major version (X in rX.Y)
+              const releasesByMajor = {};
+              const metaReleaseAssignments = {};
               
-              const major = parseInt(tagMatch[1]);
-              const date = new Date(releaseDate);
+              // Parse all releases and group by major version
+              releases.forEach(release => {
+                const tagMatch = release.tag_name.match(/^r(\d+)\.(\d+)$/);
+                
+                if (!tagMatch) {
+                  // Not in rX.Y format -> Legacy
+                  metaReleaseAssignments[release.tag_name] = {
+                    cycle: 'Legacy',
+                    confidence: 'high',
+                    reason: 'Not in rX.Y format'
+                  };
+                  return;
+                }
+                
+                if (release.prerelease) {
+                  // Pre-release -> no meta-release
+                  metaReleaseAssignments[release.tag_name] = {
+                    cycle: 'Pre-release',
+                    confidence: 'high',
+                    reason: 'Pre-release version'
+                  };
+                  return;
+                }
+                
+                const major = parseInt(tagMatch[1]);
+                const minor = parseInt(tagMatch[2]);
+                
+                if (!releasesByMajor[major]) {
+                  releasesByMajor[major] = [];
+                }
+                
+                releasesByMajor[major].push({
+                  ...release,
+                  major: major,
+                  minor: minor,
+                  releaseDate: new Date(release.published_at)
+                });
+              });
               
-              let estimatedCycle;
-              if (major === 1) {
-                estimatedCycle = date < metaReleaseDates.Fall24 ? 'Pre-Fall24' : 
-                                date < metaReleaseDates.Spring25 ? 'Fall24' : 'Spring25';
-              } else if (major === 2) {
-                estimatedCycle = date < metaReleaseDates.Spring25 ? 'Spring25' : 'Fall25';
-              } else if (major === 3) {
-                estimatedCycle = 'Fall25';
-              } else {
-                estimatedCycle = 'Future';
-              }
+              // Sort releases within each major version by date (earliest first)
+              Object.keys(releasesByMajor).forEach(major => {
+                releasesByMajor[major].sort((a, b) => a.releaseDate - b.releaseDate);
+              });
               
-              return { cycle: estimatedCycle, confidence: 'high', reason: `r${major}.x pattern + timing` };
+              // Determine meta-releases for each major version cycle
+              Object.entries(releasesByMajor).forEach(([major, releasesInMajor]) => {
+                if (releasesInMajor.length === 0) return;
+                
+                // Find the FIRST public release in this major version
+                const firstRelease = releasesInMajor[0];
+                const firstReleaseDate = firstRelease.releaseDate;
+                
+                // Determine meta-release based on the first release date
+                let metaRelease = 'Other release';
+                
+                // Check for Fall24: August or September 2024
+                if (firstReleaseDate.getFullYear() === 2024 && 
+                    (firstReleaseDate.getMonth() === 7 || firstReleaseDate.getMonth() === 8)) { // Month is 0-indexed
+                  metaRelease = 'Fall24';
+                }
+                // Check for Spring25: February or March 2025
+                else if (firstReleaseDate.getFullYear() === 2025 && 
+                         (firstReleaseDate.getMonth() === 1 || firstReleaseDate.getMonth() === 2)) { // Month is 0-indexed
+                  metaRelease = 'Spring25';
+                }
+                // Check for Fall25: August or September 2025
+                else if (firstReleaseDate.getFullYear() === 2025 && 
+                         (firstReleaseDate.getMonth() === 7 || firstReleaseDate.getMonth() === 8)) { // Month is 0-indexed
+                  metaRelease = 'Fall25';
+                }
+                
+                // Assign meta-releases to all releases in this major version
+                releasesInMajor.forEach((release, index) => {
+                  if (index === 0) {
+                    // First release gets the meta-release name
+                    metaReleaseAssignments[release.tag_name] = {
+                      cycle: metaRelease,
+                      confidence: 'high',
+                      reason: `First release in r${major}.x cycle (${firstReleaseDate.toDateString()})`
+                    };
+                  } else {
+                    // Subsequent releases in the same major version are patches
+                    metaReleaseAssignments[release.tag_name] = {
+                      cycle: 'Patch',
+                      confidence: 'high',
+                      reason: `Patch release for ${metaRelease} (r${major}.x cycle)`
+                    };
+                  }
+                });
+              });
+              
+              return metaReleaseAssignments;
             }
             
             async function getAPIDefinitions(repo, ref = 'main') {
@@ -840,13 +868,31 @@ jobs:
                   continue;
                 }
                 
+                // Determine meta-releases for all releases in this repository
+                console.log(`  🏷️ Determining meta-releases for all releases...`);
+                const metaReleaseAssignments = determineMetaReleases(releases.data);
+                
+                // Log summary of meta-release assignments
+                const metaSummary = {};
+                Object.values(metaReleaseAssignments).forEach(assignment => {
+                  metaSummary[assignment.cycle] = (metaSummary[assignment.cycle] || 0) + 1;
+                });
+                console.log(`    📊 Meta-release summary: ${Object.entries(metaSummary).map(([k,v]) => `${k}:${v}`).join(', ')}`);
+                
                 // Analyze releases
                 const releaseAnalysis = [];
                 for (let j = 0; j < releases.data.length; j++) {
                   const release = releases.data[j];
                   console.log(`    📋 Processing release ${release.tag_name}`);
                   
-                  const metaRelease = determineMetaRelease(repo.name, release.tag_name, release.published_at);
+                  const metaRelease = metaReleaseAssignments[release.tag_name] || {
+                    cycle: 'Unknown',
+                    confidence: 'low',
+                    reason: 'Could not determine meta-release'
+                  };
+                  
+                  console.log(`      🏷️ Meta-release: ${metaRelease.cycle}`);
+                  
                   const apiDefinitions = await getAPIDefinitions(repo, release.tag_name);
                   
                   releaseAnalysis.push({
