@@ -1,4 +1,18 @@
-name: Generate CAMARA Project Reports
+- name: Debug Job Outputs
+        if: github.event.inputs.report_type == 'api-releases'
+        run: |
+          echo "🔧 Debug: Checking job outputs for matrix..."
+          echo "Repository groups output: '${{ steps.get-api-repos.outputs.repository_groups }}'"
+          echo "Total repos: '${{ steps.get-api-repos.outputs.total_repos }}'"
+          echo "Total groups: '${{ steps.get-api-repos.outputs.total_groups }}'"
+          
+          # Check if outputs are empty
+          if [ -z "${{ steps.get-api-repos.outputs.repository_groups }}" ]; then
+            echo "❌ ERROR: repository_groups output is empty!"
+            exit 1
+          else
+            echo "✅ repository_groups output is set"
+          finame: Generate CAMARA Project Reports
 
 on:
   workflow_dispatch:
@@ -32,6 +46,10 @@ on:
 jobs:
   generate-report:
     runs-on: ubuntu-latest
+    outputs:
+      repository_groups: ${{ steps.get-api-repos.outputs.repository_groups }}
+      total_repos: ${{ steps.get-api-repos.outputs.total_repos }}
+      total_groups: ${{ steps.get-api-repos.outputs.total_groups }}
     steps:
 
       - name: Generate Repository Overview Report
@@ -1054,7 +1072,7 @@ jobs:
             console.log(`🎉 Security analysis report generation completed!`);
 
   analyze-api-repositories:
-    if: github.event.inputs.report_type == 'api-releases'
+    if: github.event.inputs.report_type == 'api-releases' && needs.generate-report.outputs.repository_groups != '' && needs.generate-report.outputs.repository_groups != null
     needs: [generate-report]
     strategy:
       matrix:
@@ -1299,7 +1317,7 @@ jobs:
           retention-days: 1  # Short retention since we'll combine them
 
   combine-api-analysis:
-    if: github.event.inputs.report_type == 'api-releases'
+    if: github.event.inputs.report_type == 'api-releases' && needs.analyze-api-repositories.result == 'success'
     needs: [generate-report, analyze-api-repositories]
     runs-on: ubuntu-latest
     steps:
