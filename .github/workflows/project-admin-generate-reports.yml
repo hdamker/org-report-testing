@@ -1143,17 +1143,6 @@ jobs:
             const allMetaReleaseAPIs = new Set(); // APIs in Fall24, Spring25, Fall25 only
             const allAPIs = new Set(); // All APIs including Other releases (but NEVER Legacy or Pre-release)
             
-            // Debug counters to track what's being added
-            const debugCounts = {
-              'Fall24': 0,
-              'Spring25': 0, 
-              'Fall25': 0,
-              'Other release': 0,
-              'Patch': 0,
-              'Legacy': 0,
-              'Pre-release': 0
-            };
-            
             allRepositories.forEach(repo => {
               repo.releases.forEach(release => {
                 const cycle = release.meta_release.cycle;
@@ -1172,24 +1161,10 @@ jobs:
                   // Add to "all releases" set - NEVER include Legacy or Pre-release
                   if (!['Legacy', 'Pre-release'].includes(cycle)) {
                     allAPIs.add(api.name);
-                    debugCounts[cycle] = (debugCounts[cycle] || 0) + 1;
-                  } else {
-                    // Track what we're excluding for debugging
-                    console.log(`    🚫 DEBUG: Excluding ${cycle} release ${api.name} from allAPIs count`);
                   }
                 });
               });
             });
-            
-            console.log(`🔍 DEBUG: allAPIs composition:`);
-            Object.entries(debugCounts).forEach(([category, count]) => {
-              if (count > 0) {
-                console.log(`  - ${category}: ${count} API instances added to allAPIs`);
-              }
-            });
-            console.log(`  - Total unique APIs in allAPIs: ${allAPIs.size}`);
-            console.log(`  - Expected categories: Fall24, Spring25, Fall25, Other release, Patch`);
-            console.log(`  - Excluded categories: Legacy, Pre-release`);
             
             // Filter displayed categories based on filter settings
             const displayableCategories = {};
