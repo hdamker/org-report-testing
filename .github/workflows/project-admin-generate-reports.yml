@@ -1117,31 +1117,38 @@ jobs:
             };
             
             const allMetaReleaseAPIs = new Set(); // APIs in Fall24, Spring25, Fall25 only
-            const allAPIs = new Set(); // All APIs including Other releases
+            const allAPIs = new Set(); // All APIs including Other releases (but NEVER Legacy or Pre-release)
             
             allRepositories.forEach(repo => {
               repo.releases.forEach(release => {
                 const cycle = release.meta_release.cycle;
                 
-                // Apply filters for API counting
-                if (!filters.includePrerelease && cycle === 'Pre-release') return;
-                if (!filters.includeLegacy && cycle === 'Legacy') return;
-                
                 release.api_definitions.forEach(api => {
-                  // Add to specific meta-release category
+                  // Add to specific meta-release category (for filtered display)
                   if (apisByMetaRelease[cycle]) {
                     apisByMetaRelease[cycle].add(api.name);
                   }
                   
-                  // Add to combined sets
-                  allAPIs.add(api.name);
-                  
-                  // Add to meta-release combined set (excluding patches, legacy, pre-release)
+                  // Add to meta-release combined set (Fall24, Spring25, Fall25 only)
                   if (['Fall24', 'Spring25', 'Fall25'].includes(cycle)) {
                     allMetaReleaseAPIs.add(api.name);
                   }
+                  
+                  // Add to "all releases" set - NEVER include Legacy or Pre-release
+                  if (!['Legacy', 'Pre-release'].includes(cycle)) {
+                    allAPIs.add(api.name);
+                  }
                 });
               });
+            });
+            
+            // Filter displayed categories based on filter settings
+            const displayableCategories = {};
+            Object.entries(apisByMetaRelease).forEach(([category, apis]) => {
+              // Apply display filters
+              if (!filters.includePrerelease && category === 'Pre-release') return;
+              if (!filters.includeLegacy && category === 'Legacy') return;
+              displayableCategories[category] = apis;
             });
             
             report += `## Unique API Analysis\n\n`;
@@ -1153,21 +1160,23 @@ jobs:
               report += `${excludedTypes.join(' and ')} are excluded*\n\n`;
             }
             report += `### APIs by Meta-Release Category\n`;
-            report += `- **Fall24**: ${apisByMetaRelease['Fall24'].size} unique APIs\n`;
-            report += `- **Spring25**: ${apisByMetaRelease['Spring25'].size} unique APIs\n`;
-            report += `- **Fall25**: ${apisByMetaRelease['Fall25'].size} unique APIs\n`;
-            report += `- **Other releases**: ${apisByMetaRelease['Other release'].size} unique APIs\n`;
-            report += `- **Patch releases**: ${apisByMetaRelease['Patch'].size} unique APIs\n`;
-            if (filters.includeLegacy) {
-              report += `- **Legacy releases**: ${apisByMetaRelease['Legacy'].size} unique APIs\n`;
+            report += `- **Fall24**: ${displayableCategories['Fall24']?.size || 0} unique APIs\n`;
+            report += `- **Spring25**: ${displayableCategories['Spring25']?.size || 0} unique APIs\n`;
+            report += `- **Fall25**: ${displayableCategories['Fall25']?.size || 0} unique APIs\n`;
+            report += `- **Other releases**: ${displayableCategories['Other release']?.size || 0} unique APIs\n`;
+            report += `- **Patch releases**: ${displayableCategories['Patch']?.size || 0} unique APIs\n`;
+            if (filters.includeLegacy && displayableCategories['Legacy']) {
+              report += `- **Legacy releases**: ${displayableCategories['Legacy'].size} unique APIs\n`;
             }
-            if (filters.includePrerelease) {
-              report += `- **Pre-releases**: ${apisByMetaRelease['Pre-release'].size} unique APIs\n`;
+            if (filters.includePrerelease && displayableCategories['Pre-release']) {
+              report += `- **Pre-releases**: ${displayableCategories['Pre-release'].size} unique APIs\n`;
             }
             report += `\n`;
             report += `### Combined API Counts\n`;
             report += `- **Meta-releases (Fall24 + Spring25 + Fall25)**: ${allMetaReleaseAPIs.size} unique APIs\n`;
-            report += `- **All releases (including Other releases)**: ${allAPIs.size} unique APIs\n`;
+            report += `- **All releases (including Other releases)**: ${allAPIs.size} unique APIs *\n`;
+            report += `\n`;
+            report += `\\* *Note: "All releases" count never includes Legacy or Pre-releases, regardless of filter settings*\n`;
             report += `\n`;
             
             // Recent releases (last 30 days) - filtered
