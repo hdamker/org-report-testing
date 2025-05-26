@@ -560,7 +560,7 @@ jobs:
               });
               
               if (response.data.length === 0) break;
-              allRepos = allRepos.concat(response.data);
+              allRepos.push(...response.data);
               page++;
             }
             
