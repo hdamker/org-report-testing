@@ -33,8 +33,6 @@ jobs:
   generate-report:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
       - name: Generate Repository Overview Report
         if: github.event.inputs.report_type == 'repository-overview' || github.event_name == 'schedule'
