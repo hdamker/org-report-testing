@@ -49,12 +49,6 @@ on:
         type: string
         default: ''
       
-      custom_input:
-        description: 'Custom input for the operation'
-        required: false
-        type: string
-        default: ''
-      
       exclude_repos:
         description: 'Comma-separated list of repos to exclude'
         required: false
@@ -79,10 +73,10 @@ jobs:
             const excludeRepos = '${{ github.event.inputs.exclude_repos }}'.split(',').map(r => r.trim()).filter(r => r);
             
             // Category selection inputs
-            const includeSandbox = '${{ github.event.inputs.include_sandbox_repos }}' === 'true';
-            const includeIncubating = '${{ github.event.inputs.include_incubating_repos }}' === 'true';
-            const includeWorkingGroup = '${{ github.event.inputs.include_working_group_repos }}' === 'true';
-            const includeOther = '${{ github.event.inputs.include_other_repos }}' === 'true';
+            const includeSandbox = ${{ fromJson(github.event.inputs.include_sandbox_repos) }};
+            const includeIncubating = ${{ fromJson(github.event.inputs.include_incubating_repos) }};
+            const includeWorkingGroup = ${{ fromJson(github.event.inputs.include_working_group_repos) }};
+            const includeOther = ${{ fromJson(github.event.inputs.include_other_repos) }};
             
             console.log(`Getting repositories for organization: ${org}`);
             console.log(`Filter pattern: ${filterPattern}`);
@@ -200,8 +194,7 @@ jobs:
           repository_full_name: ${{ matrix.repository.full_name }}
           default_branch: ${{ matrix.repository.default_branch }}
           operation: ${{ github.event.inputs.operation }}
-          dry_run: ${{ github.event.inputs.dry_run }}
-          custom_input: ${{ github.event.inputs.custom_input }}
+          dry_run: ${{ fromJson(github.event.inputs.dry_run) }}
 
   summary:
     needs: [get-repositories, execute-changes]
@@ -214,13 +207,13 @@ jobs:
           script: |
             const totalRepos = ${{ needs.get-repositories.outputs.total_count }};
             const operation = '${{ github.event.inputs.operation }}';
-            const dryRun = '${{ github.event.inputs.dry_run }}' === 'true';
+            const dryRun = ${{ fromJson(github.event.inputs.dry_run) }};
             
             // Category selections
-            const includeSandbox = '${{ github.event.inputs.include_sandbox_repos }}' === 'true';
-            const includeIncubating = '${{ github.event.inputs.include_incubating_repos }}' === 'true';
-            const includeWorkingGroup = '${{ github.event.inputs.include_working_group_repos }}' === 'true';
-            const includeOther = '${{ github.event.inputs.include_other_repos }}' === 'true';
+            const includeSandbox = ${{ fromJson(github.event.inputs.include_sandbox_repos) }};
+            const includeIncubating = ${{ fromJson(github.event.inputs.include_incubating_repos) }};
+            const includeWorkingGroup = ${{ fromJson(github.event.inputs.include_working_group_repos) }};
+            const includeOther = ${{ fromJson(github.event.inputs.include_other_repos) }};
             
             let selectedCategories = [];
             if (includeSandbox) selectedCategories.push('Sandbox API');

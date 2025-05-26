@@ -22,12 +22,6 @@ on:
         required: true
         type: boolean
         default: true
-      
-      custom_input:
-        description: 'Custom input for the operation'
-        required: false
-        type: string
-        default: ''
 
 jobs:
   validate-repository:
@@ -114,8 +108,7 @@ jobs:
       repository_full_name: ${{ needs.validate-repository.outputs.repository_full_name }}
       default_branch: ${{ needs.validate-repository.outputs.default_branch }}
       operation: ${{ github.event.inputs.operation }}
-      dry_run: ${{ github.event.inputs.dry_run }}
-      custom_input: ${{ github.event.inputs.custom_input }}
+      dry_run: ${{ fromJson(github.event.inputs.dry_run) }}
 
   test-summary:
     needs: [validate-repository, execute-test]
@@ -130,7 +123,7 @@ jobs:
             const testResult = '${{ needs.execute-test.result }}';
             const repoName = '${{ github.event.inputs.repository_name }}';
             const operation = '${{ github.event.inputs.operation }}';
-            const dryRun = '${{ github.event.inputs.dry_run }}' === 'true';
+            const dryRun = ${{ fromJson(github.event.inputs.dry_run) }};
             
             let summary = `# Single Repository Test Results\n\n`;
             
