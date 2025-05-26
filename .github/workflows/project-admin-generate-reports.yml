@@ -23,6 +23,18 @@ on:
         required: false
         type: boolean
         default: false
+      
+      include_prerelease:
+        description: 'Include pre-releases in analysis and reports'
+        required: false
+        type: boolean
+        default: false
+      
+      include_legacy:
+        description: 'Include legacy releases in analysis and reports'
+        required: false
+        type: boolean
+        default: false
 
   schedule:
     # Run weekly on Mondays at 07:35 UTC
@@ -639,10 +651,12 @@ jobs:
             const org = 'camaraproject';
             const groupId = ${{ matrix.group.id }};
             const repositories = ${{ toJson(matrix.group.repositories) }};
+            const includePrerelease = '${{ github.event.inputs.include_prerelease }}' === 'true';
+            const includeLegacy = '${{ github.event.inputs.include_legacy }}' === 'true';
             
             console.log(`🚀 Starting analysis for Group ${groupId}`);
             console.log(`📦 Processing ${repositories.length} repositories: ${repositories.map(r => r.name).join(', ')}`);
-            
+            console.log(`⚙️ Filters: includePrerelease=${includePrerelease}, includeLegacy=${includeLegacy}`);
             // Helper functions for API calls and meta-release determination
             function delay(ms) {
               return new Promise(resolve => setTimeout(resolve, ms));
@@ -678,7 +692,6 @@ jobs:
                   // Not in rX.Y format -> Legacy
                   metaReleaseAssignments[release.tag_name] = {
                     cycle: 'Legacy',
-                    confidence: 'high',
                     reason: 'Not in rX.Y format'
                   };
                   return;
@@ -688,7 +701,6 @@ jobs:
                   // Pre-release -> no meta-release
                   metaReleaseAssignments[release.tag_name] = {
                     cycle: 'Pre-release',
-                    confidence: 'high',
                     reason: 'Pre-release version'
                   };
                   return;
@@ -747,14 +759,12 @@ jobs:
                     // First release gets the meta-release name
                     metaReleaseAssignments[release.tag_name] = {
                       cycle: metaRelease,
-                      confidence: 'high',
                       reason: `First release in r${major}.x cycle (${firstReleaseDate.toDateString()})`
                     };
                   } else {
                     // Subsequent releases in the same major version are patches
                     metaReleaseAssignments[release.tag_name] = {
                       cycle: 'Patch',
-                      confidence: 'high',
                       reason: `Patch release for ${metaRelease} (r${major}.x cycle)`
                     };
                   }
@@ -835,7 +845,12 @@ jobs:
               groupId: groupId,
               repositories: [],
               repositoriesWithoutReleases: [],
-              processingErrors: []
+              repositoriesWithPrereleasesOnly: [],
+              processingErrors: [],
+              filters: {
+                includePrerelease: includePrerelease,
+                includeLegacy: includeLegacy
+              }
             };
             
             for (let i = 0; i < repositories.length; i++) {
@@ -868,6 +883,30 @@ jobs:
                   continue;
                 }
                 
+                // Check if repository has only pre-releases (no public releases)
+                const hasPublicReleases = releases.data.some(release => !release.prerelease);
+                if (!hasPublicReleases) {
+                  console.log(`  ⚠️ Repository has only pre-releases`);
+                  const mainBranchAPIs = await getAPIDefinitions(repo, 'main');
+                  const prereleaseAPIs = new Set();
+                  
+                  // Collect APIs from all pre-releases
+                  for (const release of releases.data) {
+                    const apiDefs = await getAPIDefinitions(repo, release.tag_name);
+                    apiDefs.forEach(api => prereleaseAPIs.add(`${api.name} v${api.version}`));
+                  }
+                  
+                  groupResults.repositoriesWithPrereleasesOnly.push({
+                    name: repo.name,
+                    repo_type: repo.repo_type,
+                    html_url: repo.html_url,
+                    prerelease_count: releases.data.length,
+                    api_definitions: mainBranchAPIs,
+                    prerelease_apis: Array.from(prereleaseAPIs)
+                  });
+                  continue;
+                }
+                
                 // Determine meta-releases for all releases in this repository
                 console.log(`  🏷️ Determining meta-releases for all releases...`);
                 const metaReleaseAssignments = determineMetaReleases(releases.data);
@@ -879,17 +918,29 @@ jobs:
                 });
                 console.log(`    📊 Meta-release summary: ${Object.entries(metaSummary).map(([k,v]) => `${k}:${v}`).join(', ')}`);
                 
+                // Filter releases based on input flags
+                let filteredReleases = releases.data;
+                if (!includePrerelease) {
+                  filteredReleases = filteredReleases.filter(release => !release.prerelease);
+                  console.log(`    🔍 Filtered out pre-releases: ${filteredReleases.length}/${releases.data.length} releases remaining`);
+                }
+                
                 // Analyze releases
                 const releaseAnalysis = [];
-                for (let j = 0; j < releases.data.length; j++) {
-                  const release = releases.data[j];
+                for (let j = 0; j < filteredReleases.length; j++) {
+                  const release = filteredReleases[j];
                   console.log(`    📋 Processing release ${release.tag_name}`);
                   
                   const metaRelease = metaReleaseAssignments[release.tag_name] || {
                     cycle: 'Unknown',
-                    confidence: 'low',
                     reason: 'Could not determine meta-release'
                   };
+                  
+                  // Skip legacy releases if not included
+                  if (!includeLegacy && metaRelease.cycle === 'Legacy') {
+                    console.log(`      ⏭️ Skipping legacy release ${release.tag_name}`);
+                    continue;
+                  }
                   
                   console.log(`      🏷️ Meta-release: ${metaRelease.cycle}`);
                   
@@ -933,8 +984,10 @@ jobs:
             
             console.log(`\n✅ Group ${groupId} completed:`);
             console.log(`  - Repositories processed: ${groupResults.repositories.length}`);
+            console.log(`  - Repositories with pre-releases only: ${groupResults.repositoriesWithPrereleasesOnly.length}`);
             console.log(`  - Repositories without releases: ${groupResults.repositoriesWithoutReleases.length}`);
             console.log(`  - Processing errors: ${groupResults.processingErrors.length}`);
+            console.log(`  - Filters applied: prerelease=${includePrerelease}, legacy=${includeLegacy}`);
             
             // Save group results as artifact
             const fs = require('fs');
@@ -982,7 +1035,9 @@ jobs:
             
             let allRepositories = [];
             let allRepositoriesWithoutReleases = [];
+            let allRepositoriesWithPrereleasesOnly = [];
             let allProcessingErrors = [];
+            let filters = { includePrerelease: false, includeLegacy: false };
             
             // Combine all group results
             for (const file of groupFiles) {
@@ -993,47 +1048,139 @@ jobs:
               
               allRepositories = allRepositories.concat(groupData.repositories);
               allRepositoriesWithoutReleases = allRepositoriesWithoutReleases.concat(groupData.repositoriesWithoutReleases);
+              allRepositoriesWithPrereleasesOnly = allRepositoriesWithPrereleasesOnly.concat(groupData.repositoriesWithPrereleasesOnly || []);
               allProcessingErrors = allProcessingErrors.concat(groupData.processingErrors);
+              
+              // Get filters from first group (should be same for all)
+              if (groupData.filters) {
+                filters = groupData.filters;
+              }
             }
             
             console.log(`✅ Combined results:`);
             console.log(`  - Total repositories with releases: ${allRepositories.length}`);
+            console.log(`  - Total repositories with pre-releases only: ${allRepositoriesWithPrereleasesOnly.length}`);
             console.log(`  - Total repositories without releases: ${allRepositoriesWithoutReleases.length}`);
             console.log(`  - Total processing errors: ${allProcessingErrors.length}`);
+            console.log(`  - Filters: prerelease=${filters.includePrerelease}, legacy=${filters.includeLegacy}`);
             
             // Generate comprehensive report (same logic as before but with combined data)
             let report = `# CAMARA API Releases Report (Parallel Analysis)\n\n`;
             report += `**Generated**: ${new Date().toISOString()}\n`;
             report += `**Processing Method**: Parallel Matrix Analysis\n`;
-            report += `**API Repositories Analyzed**: ${allRepositories.length + allRepositoriesWithoutReleases.length}\n`;
+            report += `**API Repositories Analyzed**: ${allRepositories.length + allRepositoriesWithPrereleasesOnly.length + allRepositoriesWithoutReleases.length}\n`;
             report += `**Repositories with Releases**: ${allRepositories.length}\n`;
+            report += `**Repositories with Pre-releases Only**: ${allRepositoriesWithPrereleasesOnly.length}\n`;
             report += `**Repositories without Releases**: ${allRepositoriesWithoutReleases.length}\n`;
             if (allProcessingErrors.length > 0) {
               report += `**Processing Errors**: ${allProcessingErrors.length}\n`;
             }
+            report += `**Filters Applied**: Include Pre-releases: ${filters.includePrerelease ? 'Yes' : 'No'}, Include Legacy: ${filters.includeLegacy ? 'Yes' : 'No'}\n`;
             report += `\n`;
             
-            // Meta-release summary
+            // Meta-release summary (filtered)
             const metaReleaseCounts = {};
             allRepositories.forEach(repo => {
               repo.releases.forEach(release => {
                 const cycle = release.meta_release.cycle;
+                
+                // Apply filters
+                if (!filters.includePrerelease && cycle === 'Pre-release') return;
+                if (!filters.includeLegacy && cycle === 'Legacy') return;
+                
                 metaReleaseCounts[cycle] = (metaReleaseCounts[cycle] || 0) + 1;
               });
             });
             
             report += `## Meta-Release Summary\n\n`;
+            if (!filters.includePrerelease || !filters.includeLegacy) {
+              report += `*Note: This summary reflects applied filters - `;
+              const excludedTypes = [];
+              if (!filters.includePrerelease) excludedTypes.push('pre-releases');
+              if (!filters.includeLegacy) excludedTypes.push('legacy releases');
+              report += `${excludedTypes.join(' and ')} are excluded*\n\n`;
+            }
             Object.entries(metaReleaseCounts).sort().forEach(([cycle, count]) => {
               report += `- **${cycle}**: ${count} releases\n`;
             });
             report += `\n`;
             
-            // Recent releases (last 30 days)
+            // API counting by meta-release category (filtered)
+            const apisByMetaRelease = {
+              'Fall24': new Set(),
+              'Spring25': new Set(),
+              'Fall25': new Set(),
+              'Other release': new Set(),
+              'Patch': new Set(),
+              'Legacy': new Set(),
+              'Pre-release': new Set()
+            };
+            
+            const allMetaReleaseAPIs = new Set(); // APIs in Fall24, Spring25, Fall25 only
+            const allAPIs = new Set(); // All APIs including Other releases
+            
+            allRepositories.forEach(repo => {
+              repo.releases.forEach(release => {
+                const cycle = release.meta_release.cycle;
+                
+                // Apply filters for API counting
+                if (!filters.includePrerelease && cycle === 'Pre-release') return;
+                if (!filters.includeLegacy && cycle === 'Legacy') return;
+                
+                release.api_definitions.forEach(api => {
+                  // Add to specific meta-release category
+                  if (apisByMetaRelease[cycle]) {
+                    apisByMetaRelease[cycle].add(api.name);
+                  }
+                  
+                  // Add to combined sets
+                  allAPIs.add(api.name);
+                  
+                  // Add to meta-release combined set (excluding patches, legacy, pre-release)
+                  if (['Fall24', 'Spring25', 'Fall25'].includes(cycle)) {
+                    allMetaReleaseAPIs.add(api.name);
+                  }
+                });
+              });
+            });
+            
+            report += `## Unique API Analysis\n\n`;
+            if (!filters.includePrerelease || !filters.includeLegacy) {
+              report += `*Note: This analysis reflects applied filters - `;
+              const excludedTypes = [];
+              if (!filters.includePrerelease) excludedTypes.push('pre-releases');
+              if (!filters.includeLegacy) excludedTypes.push('legacy releases');
+              report += `${excludedTypes.join(' and ')} are excluded*\n\n`;
+            }
+            report += `### APIs by Meta-Release Category\n`;
+            report += `- **Fall24**: ${apisByMetaRelease['Fall24'].size} unique APIs\n`;
+            report += `- **Spring25**: ${apisByMetaRelease['Spring25'].size} unique APIs\n`;
+            report += `- **Fall25**: ${apisByMetaRelease['Fall25'].size} unique APIs\n`;
+            report += `- **Other releases**: ${apisByMetaRelease['Other release'].size} unique APIs\n`;
+            report += `- **Patch releases**: ${apisByMetaRelease['Patch'].size} unique APIs\n`;
+            if (filters.includeLegacy) {
+              report += `- **Legacy releases**: ${apisByMetaRelease['Legacy'].size} unique APIs\n`;
+            }
+            if (filters.includePrerelease) {
+              report += `- **Pre-releases**: ${apisByMetaRelease['Pre-release'].size} unique APIs\n`;
+            }
+            report += `\n`;
+            report += `### Combined API Counts\n`;
+            report += `- **Meta-releases (Fall24 + Spring25 + Fall25)**: ${allMetaReleaseAPIs.size} unique APIs\n`;
+            report += `- **All releases (including Other releases)**: ${allAPIs.size} unique APIs\n`;
+            report += `\n`;
+            
+            // Recent releases (last 30 days) - filtered
             const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
             const recentReleases = [];
             
             allRepositories.forEach(repo => {
               repo.releases.forEach(release => {
+                // Apply filters
+                const cycle = release.meta_release.cycle;
+                if (!filters.includePrerelease && cycle === 'Pre-release') return;
+                if (!filters.includeLegacy && cycle === 'Legacy') return;
+                
                 if (new Date(release.published_at) > thirtyDaysAgo) {
                   recentReleases.push({
                     repo: repo.name,
@@ -1047,8 +1194,8 @@ jobs:
             
             if (recentReleases.length > 0) {
               report += `## Recent Releases (Last 30 Days)\n\n`;
-              report += `| Repository | Type | Release | Version | APIs | Date | Meta-Release |\n`;
-              report += `|------------|------|---------|---------|------|------|-------------|\n`;
+              report += `| Repository | Type | Release | APIs | Date | Meta-Release |\n`;
+              report += `|------------|------|---------|------|------|-------------|\n`;
               
               recentReleases.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
               
@@ -1056,20 +1203,37 @@ jobs:
                 const date = new Date(release.published_at).toLocaleDateString();
                 const name = release.name || release.tag_name;
                 const apiList = release.api_definitions.map(api => `${api.name} v${api.version}`).join('<br>');
-                const metaRelease = `${release.meta_release.cycle} (${release.meta_release.confidence})`;
+                const metaRelease = release.meta_release.cycle;
                 
-                report += `| [${release.repo}](${release.repo_url}) | ${release.repo_type} | [${name}](${release.html_url}) | ${release.tag_name} | ${apiList} | ${date} | ${metaRelease} |\n`;
+                report += `| [${release.repo}](${release.repo_url}) | ${release.repo_type} | [${name}](${release.html_url}) | ${apiList} | ${date} | ${metaRelease} |\n`;
               }
               report += `\n`;
             }
             
-            // Consistency analysis
+            // Consistency analysis (filtered)
             report += `## Consistency Analysis\n\n`;
+            if (!filters.includePrerelease || !filters.includeLegacy) {
+              report += `*Note: This analysis reflects applied filters - `;
+              const excludedTypes = [];
+              if (!filters.includePrerelease) excludedTypes.push('pre-releases');
+              if (!filters.includeLegacy) excludedTypes.push('legacy releases');
+              report += `${excludedTypes.join(' and ')} are excluded*\n\n`;
+            }
             
             const consistencyIssues = [];
             
             for (const repo of allRepositories) {
-              const latestRelease = repo.releases[0];
+              // Filter releases for consistency analysis
+              const filteredReleases = repo.releases.filter(release => {
+                const cycle = release.meta_release.cycle;
+                if (!filters.includePrerelease && cycle === 'Pre-release') return false;
+                if (!filters.includeLegacy && cycle === 'Legacy') return false;
+                return true;
+              });
+              
+              if (filteredReleases.length === 0) continue;
+              
+              const latestRelease = filteredReleases[0];
               
               // Check main branch vs latest release
               for (const mainAPI of repo.main_branch_apis) {
@@ -1087,7 +1251,7 @@ jobs:
               }
               
               // Check release descriptions
-              for (const release of repo.releases.slice(0, 3)) {
+              for (const release of filteredReleases.slice(0, 3)) {
                 for (const api of release.api_definitions) {
                   if (!release.body.includes(api.version)) {
                     consistencyIssues.push({
@@ -1130,10 +1294,28 @@ jobs:
               report += `\n`;
             }
             
-            // Detailed repository analysis
+            // Detailed repository analysis (filtered)
             report += `## Detailed Repository Analysis\n\n`;
+            if (!filters.includePrerelease || !filters.includeLegacy) {
+              report += `*Note: This analysis reflects applied filters - `;
+              const excludedTypes = [];
+              if (!filters.includePrerelease) excludedTypes.push('pre-releases');
+              if (!filters.includeLegacy) excludedTypes.push('legacy releases');
+              report += `${excludedTypes.join(' and ')} are excluded*\n\n`;
+            }
             
             for (const repo of allRepositories.sort((a, b) => a.name.localeCompare(b.name))) {
+              // Filter releases for detailed analysis
+              const filteredReleases = repo.releases.filter(release => {
+                const cycle = release.meta_release.cycle;
+                if (!filters.includePrerelease && cycle === 'Pre-release') return false;
+                if (!filters.includeLegacy && cycle === 'Legacy') return false;
+                return true;
+              });
+              
+              // Skip repositories with no releases after filtering
+              if (filteredReleases.length === 0) continue;
+              
               report += `### [${repo.name}](${repo.html_url}) (${repo.repo_type})\n\n`;
               
               if (repo.main_branch_apis.length > 0) {
@@ -1148,13 +1330,29 @@ jobs:
               report += `| Release | Date | Type | Meta-Release | APIs |\n`;
               report += `|---------|------|------|--------------|------|\n`;
               
-              for (const release of repo.releases.slice(0, 5)) {
+              for (const release of filteredReleases.slice(0, 5)) {
                 const date = new Date(release.published_at).toLocaleDateString();
                 const type = release.prerelease ? 'Pre-release' : 'Release';
                 const metaRelease = `${release.meta_release.cycle}`;
                 const apiList = release.api_definitions.map(api => `${api.name} v${api.version}`).join('<br>');
                 
                 report += `| [${release.tag_name}](${release.html_url}) | ${date} | ${type} | ${metaRelease} | ${apiList} |\n`;
+              }
+              report += `\n`;
+            }
+            
+            // API Repositories with Pre-releases only (always shown)
+            if (allRepositoriesWithPrereleasesOnly.length > 0) {
+              report += `## API Repositories with Pre-releases Only\n\n`;
+              report += `*These repositories have releases but only pre-releases, no public releases yet.*\n\n`;
+              report += `| Repository | Type | Pre-releases | Main Branch APIs | Pre-release APIs |\n`;
+              report += `|------------|------|--------------|------------------|-----------------|\n`;
+              
+              for (const repo of allRepositoriesWithPrereleasesOnly.sort((a, b) => a.name.localeCompare(b.name))) {
+                const mainAPIs = repo.api_definitions.map(api => `${api.name} v${api.version}`).join('<br>');
+                const prereleaseAPIs = repo.prerelease_apis.join('<br>');
+                
+                report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${repo.prerelease_count} | ${mainAPIs} | ${prereleaseAPIs} |\n`;
               }
               report += `\n`;
             }
@@ -1181,10 +1379,14 @@ jobs:
             console.log(`✅ Parallel API releases report saved as ${filename}`);
             console.log(`📊 Final Statistics:`);
             console.log(`  - Processing time: ~3-5 minutes (vs 15-20 minutes sequential)`);
-            console.log(`  - Repositories analyzed: ${allRepositories.length + allRepositoriesWithoutReleases.length}`);
+            console.log(`  - Repositories analyzed: ${allRepositories.length + allRepositoriesWithPrereleasesOnly.length + allRepositoriesWithoutReleases.length}`);
+            console.log(`  - Repositories with releases: ${allRepositories.length}`);
+            console.log(`  - Repositories with pre-releases only: ${allRepositoriesWithPrereleasesOnly.length}`);
+            console.log(`  - Repositories without releases: ${allRepositoriesWithoutReleases.length}`);
             console.log(`  - Recent releases found: ${recentReleases.length}`);
             console.log(`  - Consistency issues: ${consistencyIssues.length}`);
             console.log(`  - Processing errors: ${allProcessingErrors.length}`);
+            console.log(`  - Filters: prerelease=${filters.includePrerelease}, legacy=${filters.includeLegacy}`);
             
             core.setOutput('report_filename', filename);
             
