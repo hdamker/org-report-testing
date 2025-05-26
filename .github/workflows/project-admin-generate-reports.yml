@@ -36,9 +36,11 @@ jobs:
       repository_groups: ${{ steps.get-api-repos.outputs.repository_groups }}
       total_repos: ${{ steps.get-api-repos.outputs.total_repos }}
       total_groups: ${{ steps.get-api-repos.outputs.total_groups }}
+      report_filename: ${{ steps.generate-overview.outputs.report_filename || steps.generate-security.outputs.report_filename }}
     steps:
       - name: Generate Repository Overview Report
         if: github.event.inputs.report_type == 'repository-overview' || github.event_name == 'schedule'
+        id: generate-overview
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
@@ -610,6 +612,7 @@ jobs:
 
       - name: Generate Security Analysis Report
         if: github.event.inputs.report_type == 'security-analysis'
+        id: generate-security
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
@@ -648,6 +651,15 @@ jobs:
             await core.summary.write();
             
             console.log(`🎉 Security analysis report generation completed!`);
+
+      # NEW: Upload artifact for repository-overview and security-analysis reports
+      - name: Upload Repository Overview and Security Analysis Reports
+        if: github.event.inputs.report_type == 'repository-overview' || github.event_name == 'schedule' || github.event.inputs.report_type == 'security-analysis'
+        uses: actions/upload-artifact@v4
+        with:
+          name: camara-project-report-${{ github.event.inputs.report_type || 'repository-overview' }}-${{ github.run_number }}
+          path: '*.md'
+          retention-days: 90
 
   analyze-api-repositories:
     if: github.event.inputs.report_type == 'api-releases' && needs.generate-report.outputs.repository_groups != '' && needs.generate-report.outputs.repository_groups != null
@@ -1141,14 +1153,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: camara-api-releases-parallel-report
-          path: '*.md'
-          retention-days: 90
-
-      - name: Upload Report Artifact
-        if: github.event.inputs.report_type != 'api-releases'
-        uses: actions/upload-artifact@v4
-        with:
-          name: camara-project-report-${{ github.event.inputs.report_type || 'repository-overview' }}-${{ github.run_number }}
           path: '*.md'
           retention-days: 90
 
