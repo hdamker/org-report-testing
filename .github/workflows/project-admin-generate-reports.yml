@@ -904,7 +904,13 @@ jobs:
                     api_definitions: mainBranchAPIs,
                     prerelease_apis: Array.from(prereleaseAPIs)
                   });
-                  continue;
+                  
+                  // If we're not including pre-releases, skip the detailed analysis
+                  if (!includePrerelease) {
+                    continue;
+                  }
+                  // Otherwise, continue with normal processing to include these pre-releases in analysis
+                  console.log(`  📋 Including pre-releases in analysis since includePrerelease=true`);
                 }
                 
                 // Determine meta-releases for all releases in this repository
@@ -918,11 +924,29 @@ jobs:
                 });
                 console.log(`    📊 Meta-release summary: ${Object.entries(metaSummary).map(([k,v]) => `${k}:${v}`).join(', ')}`);
                 
-                // Filter releases based on input flags
-                let filteredReleases = releases.data;
+                // Filter releases based on input flags - do ALL filtering here
+                let filteredReleases = releases.data.filter(release => {
+                  // Filter pre-releases
+                  if (!includePrerelease && release.prerelease) return false;
+                  
+                  // Filter legacy releases
+                  const metaRelease = metaReleaseAssignments[release.tag_name];
+                  if (!includeLegacy && metaRelease && metaRelease.cycle === 'Legacy') return false;
+                  
+                  return true;
+                });
+                
+                console.log(`    🔍 Filtered releases: ${filteredReleases.length}/${releases.data.length} releases included`);
                 if (!includePrerelease) {
-                  filteredReleases = filteredReleases.filter(release => !release.prerelease);
-                  console.log(`    🔍 Filtered out pre-releases: ${filteredReleases.length}/${releases.data.length} releases remaining`);
+                  const prereleaseCount = releases.data.filter(r => r.prerelease).length;
+                  console.log(`      - Excluded ${prereleaseCount} pre-releases`);
+                }
+                if (!includeLegacy) {
+                  const legacyCount = releases.data.filter(r => {
+                    const meta = metaReleaseAssignments[r.tag_name];
+                    return meta && meta.cycle === 'Legacy';
+                  }).length;
+                  console.log(`      - Excluded ${legacyCount} legacy releases`);
                 }
                 
                 // Analyze releases
@@ -1119,6 +1143,17 @@ jobs:
             const allMetaReleaseAPIs = new Set(); // APIs in Fall24, Spring25, Fall25 only
             const allAPIs = new Set(); // All APIs including Other releases (but NEVER Legacy or Pre-release)
             
+            // Debug counters to track what's being added
+            const debugCounts = {
+              'Fall24': 0,
+              'Spring25': 0, 
+              'Fall25': 0,
+              'Other release': 0,
+              'Patch': 0,
+              'Legacy': 0,
+              'Pre-release': 0
+            };
+            
             allRepositories.forEach(repo => {
               repo.releases.forEach(release => {
                 const cycle = release.meta_release.cycle;
@@ -1137,10 +1172,24 @@ jobs:
                   // Add to "all releases" set - NEVER include Legacy or Pre-release
                   if (!['Legacy', 'Pre-release'].includes(cycle)) {
                     allAPIs.add(api.name);
+                    debugCounts[cycle] = (debugCounts[cycle] || 0) + 1;
+                  } else {
+                    // Track what we're excluding for debugging
+                    console.log(`    🚫 DEBUG: Excluding ${cycle} release ${api.name} from allAPIs count`);
                   }
                 });
               });
             });
+            
+            console.log(`🔍 DEBUG: allAPIs composition:`);
+            Object.entries(debugCounts).forEach(([category, count]) => {
+              if (count > 0) {
+                console.log(`  - ${category}: ${count} API instances added to allAPIs`);
+              }
+            });
+            console.log(`  - Total unique APIs in allAPIs: ${allAPIs.size}`);
+            console.log(`  - Expected categories: Fall24, Spring25, Fall25, Other release, Patch`);
+            console.log(`  - Excluded categories: Legacy, Pre-release`);
             
             // Filter displayed categories based on filter settings
             const displayableCategories = {};
