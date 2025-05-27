@@ -223,43 +223,128 @@ jobs:
 
       - name: Execute Operation - Add Changelog CODEOWNERS
         if: inputs.operation == 'add-changelog-codeowners'
-        run: |
-          echo "Processing repository: ${{ inputs.repository_name }}"
-          
-          CODEOWNERS_FILE="CODEOWNERS"
-          
-          # Define the lines to add
-          CHANGELOG_LINES="# The following line ensures that the release-management_reviewers team will automatically added as reviewers
-          # if a pull requests is changing the CHANGELOG.MD (aka \"release PR\") and that such PRs can only be merged with an approval from a team member.
-          /CHANGELOG.MD @camaraproject/release-management_reviewers"
-          
-          # Check if CODEOWNERS exists
-          if [ -f "$CODEOWNERS_FILE" ]; then
-            # Check if CHANGELOG.MD line already exists
-            if grep -q "^/CHANGELOG\.MD" "$CODEOWNERS_FILE"; then
-              echo "✅ CHANGELOG.MD CODEOWNERS rule already exists"
-              echo "status=no-change" >> $GITHUB_ENV
-            else
-              echo "Adding CHANGELOG.MD CODEOWNERS rule to existing file"
-              echo "" >> "$CODEOWNERS_FILE"
-              echo "$CHANGELOG_LINES" >> "$CODEOWNERS_FILE"
-              echo "status=modified" >> $GITHUB_ENV
-            fi
-          else
-            echo "Creating new CODEOWNERS file with CHANGELOG.MD rule"
-            echo "$CHANGELOG_LINES" > "$CODEOWNERS_FILE"
-            echo "status=created" >> $GITHUB_ENV
-          fi
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const [owner, repo] = '${{ inputs.repository_full_name }}'.split('/');
+            
+            console.log(`Processing repository: ${owner}/${repo}`);
+            
+            // Define the lines to add
+            const changelogLines = `# The following line ensures that the release-management_reviewers team will automatically added as reviewers
+            # if a pull requests is changing the CHANGELOG.MD (aka "release PR") and that such PRs can only be merged with an approval from a team member.
+            /CHANGELOG.MD @camaraproject/release-management_reviewers`;
+            
+            try {
+              let currentContent = '';
+              let currentSha = null;
+              let fileExists = false;
+              
+              // Try to get existing CODEOWNERS file
+              try {
+                const fileResponse = await github.rest.repos.getContent({
+                  owner: owner,
+                  repo: repo,
+                  path: 'CODEOWNERS'
+                });
+                
+                if (fileResponse.data.content) {
+                  currentContent = Buffer.from(fileResponse.data.content, 'base64').toString('utf8');
+                  currentSha = fileResponse.data.sha;
+                  fileExists = true;
+                  console.log('✅ Found existing CODEOWNERS file');
+                } else {
+                  console.log('❌ CODEOWNERS file exists but has no content');
+                  fileExists = false;
+                }
+              } catch (getError) {
+                if (getError.status === 404) {
+                  console.log('⚠️ CODEOWNERS file does not exist in this repository');
+                  core.warning(`Repository ${owner}/${repo} does not have a CODEOWNERS file. This should be investigated as all CAMARA repositories are expected to have CODEOWNERS files.`);
+                  core.exportVariable('status', 'no-codeowners-file');
+                  return;
+                } else {
+                  throw getError;
+                }
+              }
+              
+              if (!fileExists) {
+                console.log('⚠️ CODEOWNERS file not found - skipping operation');
+                core.warning(`Repository ${owner}/${repo} does not have a CODEOWNERS file. Operation skipped.`);
+                core.exportVariable('status', 'no-codeowners-file');
+                return;
+              }
+              
+              // Check if CHANGELOG.MD rule already exists
+              if (currentContent.includes('/CHANGELOG.MD')) {
+                console.log('✅ CHANGELOG.MD CODEOWNERS rule already exists');
+                core.exportVariable('status', 'no-change');
+                return;
+              }
+              
+              // Prepare new content - only modify existing files
+              const newContent = currentContent.trim() + '\n\n' + changelogLines;
+              console.log('📝 Adding CHANGELOG.MD rule to existing CODEOWNERS');
+              
+              // Dry run check
+              if (${{ inputs.dry_run }}) {
+                console.log('🧪 DRY RUN: Would add CHANGELOG.MD rule to existing CODEOWNERS');
+                console.log('--- Content to be added ---');
+                console.log(changelogLines);
+                console.log('--- End content ---');
+                core.exportVariable('status', 'would-modify');
+                return;
+              }
+              
+              // Update the existing file
+              const updateParams = {
+                owner: owner,
+                repo: repo,
+                path: 'CODEOWNERS',
+                message: 'chore: add CHANGELOG.MD to CODEOWNERS for release management\n\nApplied via project-admin workflow',
+                content: Buffer.from(newContent).toString('base64'),
+                sha: currentSha
+              };
+              
+              const updateResponse = await github.rest.repos.createOrUpdateFileContents(updateParams);
+              
+              console.log('✅ CODEOWNERS file updated successfully');
+              console.log(`Commit SHA: ${updateResponse.data.commit.sha}`);
+              core.exportVariable('status', 'modified');
+              
+            } catch (error) {
+              console.error('❌ Error updating CODEOWNERS:', error.message);
+              
+              // Provide specific error messages
+              if (error.status === 403) {
+                core.setFailed(`❌ Permission denied: Your token needs 'Contents: Write' permission for repository ${owner}/${repo}`);
+              } else if (error.status === 404) {
+                core.setFailed(`❌ Repository not found: ${owner}/${repo} may not exist or token lacks access`);
+              } else if (error.status === 409) {
+                core.setFailed(`❌ Conflict: CODEOWNERS file was modified by someone else. Please retry the operation.`);
+              } else {
+                core.setFailed(`❌ Failed to update CODEOWNERS: ${error.message} (HTTP ${error.status})`);
+              }
+              throw error;
+            }
 
       - name: Check for changes
         id: check-changes
         run: |
-          if git diff --quiet && git diff --cached --quiet; then
+          # This step is now mainly for wiki operations or future git-based operations
+          # CODEOWNERS operation uses GitHub API directly and doesn't need git commits
+          if [ "${{ inputs.operation }}" == "add-changelog-codeowners" ]; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "CODEOWNERS operation uses GitHub API - no git changes to commit"
           else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "Changes detected:"
-            git status --porcelain
+            if git diff --quiet && git diff --cached --quiet; then
+              echo "has_changes=false" >> $GITHUB_OUTPUT
+            else
+              echo "has_changes=true" >> $GITHUB_OUTPUT
+              echo "Changes detected:"
+              git status --porcelain
+            fi
           fi
 
       - name: Commit and Push Changes
@@ -301,11 +386,30 @@ jobs:
           echo "## Repository: ${{ inputs.repository_name }}" >> $GITHUB_STEP_SUMMARY
           echo "**Operation**: ${{ inputs.operation }}" >> $GITHUB_STEP_SUMMARY
           echo "**Status**: ${{ env.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Has Changes**: ${{ steps.check-changes.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
           echo "**Dry Run**: ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
           
-          if [ "${{ inputs.dry_run }}" == "true" ]; then
-            echo "**Note**: This was a dry run - no changes were committed." >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ steps.check-changes.outputs.has_changes }}" == "true" ]; then
-            echo "**Note**: Changes have been committed and pushed." >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.operation }}" == "add-changelog-codeowners" ]; then
+            echo "**Method**: GitHub Contents API" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ inputs.dry_run }}" == "true" ]; then
+              echo "**Note**: This was a dry run - no changes were made via API." >> $GITHUB_STEP_SUMMARY
+            else
+              case "${{ env.status }}" in
+                "modified")
+                  echo "**Note**: CHANGELOG.MD rule added to existing CODEOWNERS file." >> $GITHUB_STEP_SUMMARY
+                  ;;
+                "no-change")
+                  echo "**Note**: CHANGELOG.MD rule already exists - no changes needed." >> $GITHUB_STEP_SUMMARY
+                  ;;
+                "no-codeowners-file")
+                  echo "**Note**: ⚠️ Repository has no CODEOWNERS file - operation skipped. This should be investigated." >> $GITHUB_STEP_SUMMARY
+                  ;;
+              esac
+            fi
+          else
+            echo "**Has Changes**: ${{ steps.check-changes.outputs.has_changes }}" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ inputs.dry_run }}" == "true" ]; then
+              echo "**Note**: This was a dry run - no changes were committed." >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ steps.check-changes.outputs.has_changes }}" == "true" ]; then
+              echo "**Note**: Changes have been committed and pushed." >> $GITHUB_STEP_SUMMARY
+            fi
           fi
