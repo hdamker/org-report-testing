@@ -265,12 +265,35 @@ jobs:
       - name: Commit and Push Changes
         if: steps.check-changes.outputs.has_changes == 'true' && inputs.dry_run == false
         run: |
+          echo "Committing changes..."
+          
+          # Verify git config is set
+          echo "Current git configuration:"
+          git config --get user.name || echo "No user.name set"
+          git config --get user.email || echo "No user.email set"
+          
+          # Set git config locally if not already set
+          git config user.name "CAMARA Admin Bot"
+          git config user.email "admin-bot@camaraproject.org"
+          
+          echo "Git configuration after local setup:"
+          git config --get user.name
+          git config --get user.email
+          
+          # Show what we're about to commit
+          echo "Files to be committed:"
+          git status --porcelain
+          
+          # Add and commit changes
           git add .
           git commit -m "chore: automated CAMARA project update - ${{ inputs.operation }}
 
           Applied via project-admin workflow
           Repository: ${{ inputs.repository_name }}
           Operation: ${{ inputs.operation }}"
+          
+          # Push changes
+          echo "Pushing changes to ${{ inputs.default_branch }}..."
           git push origin ${{ inputs.default_branch }}
 
       - name: Create summary
@@ -286,4 +309,3 @@ jobs:
           elif [ "${{ steps.check-changes.outputs.has_changes }}" == "true" ]; then
             echo "**Note**: Changes have been committed and pushed." >> $GITHUB_STEP_SUMMARY
           fi
-          
