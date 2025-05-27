@@ -35,31 +35,66 @@ jobs:
         with:
           github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
-            // Check which token is being used by examining the context
-            const token = process.env.GITHUB_TOKEN;
-            console.log('Token info:');
-            console.log('- Token starts with:', token.substring(0, 4) + '...');
-            console.log('- Token length:', token.length);
+            // The token is passed to the action but not directly accessible
+            // Let's test what we can access and determine token type by behavior
             
-            // Classic tokens start with 'ghp_', FGPAT starts with 'github_pat_'
-            if (token.startsWith('ghp_')) {
-              console.log('- Token type: Classic Personal Access Token');
-            } else if (token.startsWith('github_pat_')) {
-              console.log('- Token type: Fine-Grained Personal Access Token');
-            } else if (token.startsWith('ghs_')) {
-              console.log('- Token type: GitHub Actions token (GITHUB_TOKEN) - THIS IS THE PROBLEM!');
-              console.log('- This explains the permission errors!');
-            } else {
-              console.log('- Token type: Unknown format');
-            }
+            console.log('=== Token Debug Information ===');
             
-            // Test basic API access
             try {
+              // Test basic authentication
               const user = await github.rest.users.getAuthenticated();
-              console.log('- Authenticated as:', user.data.login);
-            } catch (error) {
-              console.log('- Authentication error:', error.message);
+              console.log('✅ Authenticated as:', user.data.login);
+              console.log('- User type:', user.data.type);
+              
+              // Test if we can access the target repository
+              const [owner, repo] = '${{ inputs.repository_full_name }}'.split('/');
+              console.log(`\nTesting access to ${owner}/${repo}:`);
+              
+              try {
+                const repoInfo = await github.rest.repos.get({
+                  owner: owner,
+                  repo: repo
+                });
+                console.log('✅ Can read repository information');
+                console.log('- Repository:', repoInfo.data.full_name);
+                console.log('- Private:', repoInfo.data.private);
+              } catch (repoError) {
+                console.log('❌ Cannot access repository:', repoError.message);
+                console.log('- Status:', repoError.status);
+              }
+              
+              // Test Contents API access (the failing operation)
+              try {
+                await github.rest.repos.getContent({
+                  owner: owner,
+                  repo: repo,
+                  path: 'README.md'  // Try a common file
+                });
+                console.log('✅ Can read file contents via API');
+              } catch (contentError) {
+                console.log('❌ Cannot read contents via API:', contentError.message);
+                console.log('- Status:', contentError.status);
+                
+                if (contentError.status === 403) {
+                  console.log('🔍 This suggests token lacks Contents permission or cross-org access');
+                }
+              }
+              
+            } catch (authError) {
+              console.log('❌ Authentication failed:', authError.message);
+              console.log('- Status:', authError.status);
+              
+              if (authError.status === 401) {
+                console.log('🔍 This suggests CAMARA_TOKEN secret is not being used');
+              }
             }
+            
+            // Check if we're using the fallback token
+            console.log('\n=== Secret Analysis ===');
+            console.log('Expected: Using CAMARA_TOKEN (your custom token)');
+            console.log('Reality: Will be determined by permission test results above');
+        env:
+          CAMARA_TOKEN_EXISTS: ${{ secrets.CAMARA_TOKEN != '' }}
 
       - name: Check Repository Permissions
         uses: actions/github-script@v7
