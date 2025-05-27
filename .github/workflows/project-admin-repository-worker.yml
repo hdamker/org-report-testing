@@ -31,17 +31,35 @@ jobs:
           ref: ${{ inputs.default_branch }}
 
       - name: Debug Token Usage
-        run: |
-          echo "Checking which token is being used..."
-          if [ -n "${{ secrets.CAMARA_TOKEN }}" ]; then
-            echo "✅ CAMARA_TOKEN is available and will be used"
-            echo "Token length: ${#CAMARA_TOKEN}"
-          else
-            echo "❌ CAMARA_TOKEN is NOT available - falling back to GITHUB_TOKEN"
-            echo "This explains the permission errors!"
-          fi
-        env:
-          CAMARA_TOKEN: ${{ secrets.CAMARA_TOKEN }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            // Check which token is being used by examining the context
+            const token = process.env.GITHUB_TOKEN;
+            console.log('Token info:');
+            console.log('- Token starts with:', token.substring(0, 4) + '...');
+            console.log('- Token length:', token.length);
+            
+            // Classic tokens start with 'ghp_', FGPAT starts with 'github_pat_'
+            if (token.startsWith('ghp_')) {
+              console.log('- Token type: Classic Personal Access Token');
+            } else if (token.startsWith('github_pat_')) {
+              console.log('- Token type: Fine-Grained Personal Access Token');
+            } else if (token.startsWith('ghs_')) {
+              console.log('- Token type: GitHub Actions token (GITHUB_TOKEN) - THIS IS THE PROBLEM!');
+              console.log('- This explains the permission errors!');
+            } else {
+              console.log('- Token type: Unknown format');
+            }
+            
+            // Test basic API access
+            try {
+              const user = await github.rest.users.getAuthenticated();
+              console.log('- Authenticated as:', user.data.login);
+            } catch (error) {
+              console.log('- Authentication error:', error.message);
+            }
 
       - name: Check Repository Permissions
         uses: actions/github-script@v7
