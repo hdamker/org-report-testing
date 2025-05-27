@@ -22,6 +22,9 @@ on:
 jobs:
   execute-operation:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write        # For reading/writing CODEOWNERS files
+      administration: write  # For wiki disable operations
     steps:
       - name: Checkout target repository
         uses: actions/checkout@v4
@@ -29,6 +32,23 @@ jobs:
           repository: ${{ inputs.repository_full_name }}
           token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
           ref: ${{ inputs.default_branch }}
+
+      - name: Simple Token Test
+        run: |
+          echo "Testing CAMARA_TOKEN directly..."
+          
+          # Test basic authentication
+          curl -s -H "Authorization: token $CAMARA_TOKEN" https://api.github.com/user | jq '.login // .message'
+          
+          # Test organization access
+          echo "Testing organization access..."
+          curl -s -H "Authorization: token $CAMARA_TOKEN" https://api.github.com/orgs/camaraproject | jq '.login // .message'
+          
+          # Test repository access
+          echo "Testing repository access..."
+          curl -s -H "Authorization: token $CAMARA_TOKEN" https://api.github.com/repos/${{ inputs.repository_full_name }} | jq '.full_name // .message'
+        env:
+          CAMARA_TOKEN: ${{ secrets.CAMARA_TOKEN }}
 
       - name: Debug Token Usage
         uses: actions/github-script@v7
