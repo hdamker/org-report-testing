@@ -1,8 +1,7 @@
 name: Bulk Repository Changes
 
 permissions:
-  contents: write        # For CODEOWNERS file operations
-  administration: write  # For wiki disable operations
+  contents: write  # For CODEOWNERS file operations
 
 on:
   workflow_dispatch:

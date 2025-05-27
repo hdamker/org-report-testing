@@ -23,8 +23,7 @@ jobs:
   execute-operation:
     runs-on: ubuntu-latest
     permissions:
-      contents: write        # For reading/writing CODEOWNERS files
-      administration: write  # For wiki disable operations
+      contents: write  # For reading/writing CODEOWNERS files
     steps:
       - name: Checkout target repository
         uses: actions/checkout@v4
