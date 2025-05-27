@@ -1,7 +1,8 @@
 name: Bulk Repository Changes
 
 permissions:
-  contents: write  # For CODEOWNERS file operations
+  contents: write       # For CODEOWNERS file operations
+  pull-requests: write  # For creating pull requests
 
 on:
   workflow_dispatch:
