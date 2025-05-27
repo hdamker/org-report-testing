@@ -23,7 +23,8 @@ jobs:
   execute-operation:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # For reading/writing CODEOWNERS files
+      contents: write       # For reading/writing CODEOWNERS files
+      pull-requests: write  # For creating pull requests
     steps:
       - name: Checkout target repository
         uses: actions/checkout@v4
@@ -313,8 +314,10 @@ jobs:
           github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
             const [owner, repo] = '${{ inputs.repository_full_name }}'.split('/');
+            const defaultBranch = '${{ inputs.default_branch }}';
             
             console.log(`Processing repository: ${owner}/${repo}`);
+            console.log(`Default branch: ${defaultBranch}`);
             
             // Define the lines to add
             const changelogLines = `# The following line ensures that the release-management_reviewers team will automatically added as reviewers
@@ -323,7 +326,6 @@ jobs:
             
             try {
               let currentContent = '';
-              let currentSha = null;
               let fileExists = false;
               
               // Try to get existing CODEOWNERS file
@@ -331,12 +333,12 @@ jobs:
                 const fileResponse = await github.rest.repos.getContent({
                   owner: owner,
                   repo: repo,
-                  path: 'CODEOWNERS'
+                  path: 'CODEOWNERS',
+                  ref: defaultBranch
                 });
                 
                 if (fileResponse.data.content) {
                   currentContent = Buffer.from(fileResponse.data.content, 'base64').toString('utf8');
-                  currentSha = fileResponse.data.sha;
                   fileExists = true;
                   console.log('✅ Found existing CODEOWNERS file');
                 } else {
@@ -368,48 +370,100 @@ jobs:
                 return;
               }
               
-              // Prepare new content - only modify existing files
+              // Prepare new content
               const newContent = currentContent.trim() + '\n\n' + changelogLines;
-              console.log('📝 Adding CHANGELOG.MD rule to existing CODEOWNERS');
+              console.log('📝 Will add CHANGELOG.MD rule to existing CODEOWNERS via pull request');
               
               // Dry run check
               if (${{ inputs.dry_run }}) {
-                console.log('🧪 DRY RUN: Would add CHANGELOG.MD rule to existing CODEOWNERS');
+                console.log('🧪 DRY RUN: Would create pull request to add CHANGELOG.MD rule');
                 console.log('--- Content to be added ---');
                 console.log(changelogLines);
                 console.log('--- End content ---');
-                core.exportVariable('status', 'would-modify');
+                core.exportVariable('status', 'would-create-pr');
                 return;
               }
               
-              // Update the existing file
-              const updateParams = {
+              // Get the latest commit SHA of the default branch
+              const branchResponse = await github.rest.repos.getBranch({
+                owner: owner,
+                repo: repo,
+                branch: defaultBranch
+              });
+              const baseSha = branchResponse.data.commit.sha;
+              
+              // Create unique branch name
+              const timestamp = Date.now();
+              const branchName = `camara-admin/add-changelog-codeowners-${timestamp}`;
+              
+              console.log(`Creating feature branch: ${branchName}`);
+              
+              // Create feature branch
+              await github.rest.git.createRef({
+                owner: owner,
+                repo: repo,
+                ref: `refs/heads/${branchName}`,
+                sha: baseSha
+              });
+              
+              // Update CODEOWNERS file on the feature branch
+              const updateResponse = await github.rest.repos.createOrUpdateFileContents({
                 owner: owner,
                 repo: repo,
                 path: 'CODEOWNERS',
                 message: 'chore: add CHANGELOG.MD to CODEOWNERS for release management\n\nApplied via project-admin workflow',
                 content: Buffer.from(newContent).toString('base64'),
-                sha: currentSha
-              };
+                branch: branchName
+              });
               
-              const updateResponse = await github.rest.repos.createOrUpdateFileContents(updateParams);
-              
-              console.log('✅ CODEOWNERS file updated successfully');
+              console.log(`✅ CODEOWNERS updated on branch ${branchName}`);
               console.log(`Commit SHA: ${updateResponse.data.commit.sha}`);
-              core.exportVariable('status', 'modified');
+              
+              // Create pull request
+              const prResponse = await github.rest.pulls.create({
+                owner: owner,
+                repo: repo,
+                title: 'chore: add CHANGELOG.MD to CODEOWNERS for release management',
+                head: branchName,
+                base: defaultBranch,
+                body: `## CAMARA Project Admin Update
+              
+              This pull request adds the CHANGELOG.MD file to CODEOWNERS to ensure that:
+              - The release-management_reviewers team is automatically added as reviewers for release PRs
+              - Release PRs (those changing CHANGELOG.MD) require approval from the release management team
+              
+              **Changes:**
+              - Added \`/CHANGELOG.MD @camaraproject/release-management_reviewers\` to CODEOWNERS
+              
+              This change was applied automatically via the CAMARA project-admin workflow.
+              
+              🤖 Generated by project-admin workflow in repository: ${{ inputs.repository_name }}`
+              });
+              
+              console.log(`✅ Pull request created successfully`);
+              console.log(`PR URL: ${prResponse.data.html_url}`);
+              console.log(`PR Number: #${prResponse.data.number}`);
+              
+              core.exportVariable('status', 'pr-created');
+              core.exportVariable('pr_number', prResponse.data.number);
+              core.exportVariable('pr_url', prResponse.data.html_url);
               
             } catch (error) {
               console.error('❌ Error updating CODEOWNERS:', error.message);
               
               // Provide specific error messages
               if (error.status === 403) {
-                core.setFailed(`❌ Permission denied: Your token needs 'Contents: Write' permission for repository ${owner}/${repo}`);
+                core.setFailed(`❌ Permission denied: Your token needs 'Contents: Write' and 'Pull Requests: Write' permissions for repository ${owner}/${repo}`);
               } else if (error.status === 404) {
                 core.setFailed(`❌ Repository not found: ${owner}/${repo} may not exist or token lacks access`);
-              } else if (error.status === 409) {
-                core.setFailed(`❌ Conflict: CODEOWNERS file was modified by someone else. Please retry the operation.`);
+              } else if (error.status === 422) {
+                if (error.message.includes('Reference already exists')) {
+                  core.setFailed(`❌ Branch conflict: A similar update may already be in progress. Please check for existing pull requests.`);
+                } else {
+                  core.setFailed(`❌ Validation error: ${error.message}`);
+                }
               } else {
-                core.setFailed(`❌ Failed to update CODEOWNERS: ${error.message} (HTTP ${error.status})`);
+                core.setFailed(`❌ Failed to create pull request: ${error.message} (HTTP ${error.status})`);
               }
               throw error;
             }
@@ -474,13 +528,15 @@ jobs:
           echo "**Dry Run**: ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ inputs.operation }}" == "add-changelog-codeowners" ]; then
-            echo "**Method**: GitHub Contents API" >> $GITHUB_STEP_SUMMARY
+            echo "**Method**: GitHub Pull Request" >> $GITHUB_STEP_SUMMARY
             if [ "${{ inputs.dry_run }}" == "true" ]; then
-              echo "**Note**: This was a dry run - no changes were made via API." >> $GITHUB_STEP_SUMMARY
+              echo "**Note**: This was a dry run - no pull request was created." >> $GITHUB_STEP_SUMMARY
             else
               case "${{ env.status }}" in
-                "modified")
-                  echo "**Note**: CHANGELOG.MD rule added to existing CODEOWNERS file." >> $GITHUB_STEP_SUMMARY
+                "pr-created")
+                  echo "**Note**: Pull request created with CHANGELOG.MD rule addition." >> $GITHUB_STEP_SUMMARY
+                  echo "**PR Number**: #${{ env.pr_number }}" >> $GITHUB_STEP_SUMMARY
+                  echo "**PR URL**: ${{ env.pr_url }}" >> $GITHUB_STEP_SUMMARY
                   ;;
                 "no-change")
                   echo "**Note**: CHANGELOG.MD rule already exists - no changes needed." >> $GITHUB_STEP_SUMMARY
