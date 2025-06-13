@@ -162,27 +162,22 @@ jobs:
             const reportType = '${{ github.event.inputs.report_type }}';
             const templateCompliance = '${{ github.event.inputs.template_compliance }}';
             
-            const report = `# CAMARA Test Report
-            
-**Generated**: ${new Date().toISOString()}
-**Report Type**: ${reportType}
-**Template Compliance**: ${templateCompliance}
-
-## Test Results
-
-✅ Workflow started successfully
-✅ API access working  
-✅ Repository processing working
-✅ Basic report generation working
-
-This is a simplified test version to verify workflow functionality.
-`;
+            let report = '# CAMARA Test Report\n\n';
+            report += '**Generated**: ' + new Date().toISOString() + '\n';
+            report += '**Report Type**: ' + reportType + '\n';
+            report += '**Template Compliance**: ' + templateCompliance + '\n\n';
+            report += '## Test Results\n\n';
+            report += '✅ Workflow started successfully\n';
+            report += '✅ API access working\n';
+            report += '✅ Repository processing working\n';
+            report += '✅ Basic report generation working\n\n';
+            report += 'This is a simplified test version to verify workflow functionality.\n';
             
             const fs = require('fs');
             const filename = 'camara-test-report.md';
             fs.writeFileSync(filename, report);
             
-            console.log(`✅ Test report saved as ${filename}`);
+            console.log('✅ Test report saved as ' + filename);
 
       - name: Upload Test Report
         if: github.event.inputs.report_type == 'repository-overview'
