@@ -87,7 +87,13 @@ The CAMARA Reporting Workflow is an automated GitHub Actions workflow that provi
 1. Go to **Actions** tab in your repository
 2. Select **"Generate CAMARA Project Reports"**
 3. Click **"Run workflow"**
-4. Choose **"repository-overview"** for your first run
+4. Configure parameters:
+   ```
+   Report type: repository-overview
+   Include archived: false
+   Detailed activity: false
+   Template compliance: false
+   ```
 5. Click **"Run workflow"** to start
 6. Download the report from **Artifacts** when complete
 
@@ -131,6 +137,10 @@ The workflow accepts several input parameters to customize report generation:
 - **Enabled**: Archived repositories included in statistics
 - **Disabled**: Only active repositories analyzed
 
+**Template Compliance Checks** (`true`/`false`, default: `false`)
+- **Enabled**: Performs comprehensive template compliance verification for API repositories
+- **Disabled**: Skips template compliance analysis (faster processing)
+
 ### Scheduling
 
 The workflow can run automatically:
@@ -152,6 +162,7 @@ The workflow can run automatically:
    Report type: api-releases
    Include archived: false
    Detailed activity: false
+   Template compliance: false
    Include prerelease: false
    Include legacy: false
    ```
@@ -163,6 +174,7 @@ gh workflow run "Generate CAMARA Project Reports" \
   --field report_type=api-releases \
   --field include_archived=false \
   --field detailed_activity=false \
+  --field template_compliance=false \
   --field include_prerelease=false \
   --field include_legacy=false
 ```
@@ -204,8 +216,18 @@ Include archived: false
 Report Type: repository-overview
 Include archived: false
 Detailed activity: true
+Template compliance: false
 ```
 *Focus on repository activity and contributor patterns*
+
+**Comprehensive Repository Analysis**:
+```
+Report Type: repository-overview
+Include archived: false
+Detailed activity: true
+Template compliance: true
+```
+*Complete repository overview with template compliance verification*
 
 ---
 
@@ -454,6 +476,12 @@ A: This indicates that an API repository follows all CAMARA template standards, 
 
 **Q: Why do some repositories show template compliance violations?**
 A: The workflow checks API repositories against comprehensive CAMARA template standards. Common violations include using deprecated "family" terminology, incorrect badges on line 8 of README, wrong website URLs, or missing descriptive lines in README files.
+
+**Q: When should I enable template compliance checks?**
+A: Enable template compliance when you need to audit API repositories for CAMARA template adherence. This adds processing time as it requires reading README files. Disable for faster reports focused on activity and statistics.
+
+**Q: Why is template compliance disabled by default?**
+A: Template compliance checking requires additional API calls to read README files, which increases processing time. It's optional so users can choose between speed (disabled) and comprehensive analysis (enabled).
 
 ### Troubleshooting
 
