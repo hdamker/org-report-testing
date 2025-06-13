@@ -72,6 +72,144 @@ jobs:
               return 'Other';
             }
             
+            // Helper function to check template compliance for repository descriptions
+            async function checkTemplateCompliance(repo, repoType) {
+              const compliance = {
+                templateUsed: true,
+                violations: []
+              };
+              
+              // Only check API repositories (Sandbox or Incubating)
+              if (!['Sandbox', 'Incubating'].includes(repoType)) {
+                return compliance;
+              }
+              
+              console.log(`      🔍 Checking template compliance for ${repo.name} (${repoType})...`);
+              
+              // Get repository README.md content
+              let readmeContent = '';
+              try {
+                const readmeResponse = await github.rest.repos.getContent({
+                  owner: org,
+                  repo: repo.name,
+                  path: 'README.md'
+                });
+                readmeContent = Buffer.from(readmeResponse.data.content, 'base64').toString('utf8');
+                console.log(`        ✅ README.md loaded (${readmeContent.length} characters)`);
+              } catch (error) {
+                compliance.violations.push({
+                  check: 'README.md availability',
+                  issue: 'README.md file not found in repository root'
+                });
+                compliance.templateUsed = false;
+                console.log(`        ❌ README.md not found: ${error.message}`);
+                // Continue with other checks even if README is missing
+              }
+              
+              // Split README into lines for line-specific checks
+              const readmeLines = readmeContent.split('\n');
+              
+              // Define expected values based on repository type
+              const expectedDescriptionStart = repoType; // "Sandbox" or "Incubating"
+              
+              const expectedBadgeLine = repoType === 'Sandbox'
+                ? '<a href="https://github.com/camaraproject/Governance/blob/main/ProjectStructureAndRoles.md" title="Sandbox API Repository"><img src="https://img.shields.io/badge/Sandbox%20API%20Repository-yellow?style=plastic"></a>'
+                : '<a href="https://github.com/camaraproject/Governance/blob/main/ProjectStructureAndRoles.md" title="Incubating API Repository"><img src="https://img.shields.io/badge/Incubating%20API%20Repository-green?style=plastic"></a>';
+              
+              const expectedReadmeLineStart = repoType === 'Sandbox'
+                ? 'Sandbox API Repository to describe, develop, document, and test'
+                : 'Incubating API Repository to evolve and maintain the definitions and documentation';
+              
+              // Check 1: README should not contain "family" or "families"
+              if (readmeContent) {
+                const familyTermsInReadme = readmeContent.toLowerCase().includes('family') || readmeContent.toLowerCase().includes('families');
+                if (familyTermsInReadme) {
+                  compliance.violations.push({
+                    check: 'Family terms in README',
+                    issue: 'README.md contains prohibited terms "family" or "families"'
+                  });
+                  compliance.templateUsed = false;
+                  console.log(`        ❌ README contains family terms`);
+                } else {
+                  console.log(`        ✅ README does not contain family terms`);
+                }
+              }
+              
+              // Check 2: Repository description should not contain "family" or "families"
+              const description = repo.description || '';
+              const descriptionFamilyTerms = description.toLowerCase().includes('family') || description.toLowerCase().includes('families');
+              if (descriptionFamilyTerms) {
+                compliance.violations.push({
+                  check: 'Family terms in description',
+                  issue: 'Repository description contains prohibited terms "family" or "families"'
+                });
+                compliance.templateUsed = false;
+                console.log(`        ❌ Description contains family terms`);
+              } else {
+                console.log(`        ✅ Description does not contain family terms`);
+              }
+              
+              // Check 3: Repository description should start with expected text
+              if (!description.startsWith(expectedDescriptionStart)) {
+                compliance.violations.push({
+                  check: 'Description format',
+                  issue: `Repository description should start with "${expectedDescriptionStart}". Current: "${description}"`
+                });
+                compliance.templateUsed = false;
+                console.log(`        ❌ Description format incorrect`);
+              } else {
+                console.log(`        ✅ Description format correct`);
+              }
+              
+              // Check 4: Website should point to Atlassian
+              if (!repo.homepage || !repo.homepage.startsWith('https://lf-camaraproject.atlassian.net/')) {
+                compliance.violations.push({
+                  check: 'Website URL',
+                  issue: `Website should point to "https://lf-camaraproject.atlassian.net/". Current: "${repo.homepage || 'No website'}"`
+                });
+                compliance.templateUsed = false;
+                console.log(`        ❌ Website URL incorrect`);
+              } else {
+                console.log(`        ✅ Website URL correct`);
+              }
+              
+              // Check 5: Line 8 should contain the correct badge (only if README was loaded)
+              if (readmeContent) {
+                const line8 = readmeLines.length >= 8 ? readmeLines[7].trim() : ''; // Array is 0-indexed
+                if (line8 !== expectedBadgeLine) {
+                  compliance.violations.push({
+                    check: 'Badge line (line 8)',
+                    issue: `Line 8 of README.md should be the ${repoType} API Repository badge. Expected: "${expectedBadgeLine}". Current: "${line8}"`
+                  });
+                  compliance.templateUsed = false;
+                  console.log(`        ❌ Badge line incorrect`);
+                } else {
+                  console.log(`        ✅ Badge line correct`);
+                }
+              }
+              
+              // Check 6: README should contain expected descriptive line (only if README was loaded)
+              if (readmeContent) {
+                const hasExpectedLine = readmeLines.some(line => 
+                  line.trim().startsWith(expectedReadmeLineStart)
+                );
+                if (!hasExpectedLine) {
+                  compliance.violations.push({
+                    check: 'Descriptive line in README',
+                    issue: `README.md should contain a line starting with "${expectedReadmeLineStart}"`
+                  });
+                  compliance.templateUsed = false;
+                  console.log(`        ❌ Descriptive line missing`);
+                } else {
+                  console.log(`        ✅ Descriptive line found`);
+                }
+              }
+              
+              console.log(`      📊 Template compliance for ${repo.name}: ${compliance.templateUsed ? '✅ PASSED' : '❌ FAILED'} (${compliance.violations.length} violations)`);
+              
+              return compliance;
+            }
+            
             // Helper function to get last activity date from multiple sources (only used if detailedActivity is true)
             async function getLastActivityDate(repo) {
               let lastActivity = new Date(repo.updated_at);
@@ -238,6 +376,9 @@ jobs:
                 
                 console.log(`  📅 Last activity: ${lastActivity.toDateString()}${detailedActivity ? ` (${detailedActivityInfo.type})` : ' (simple)'}`);
                 
+                // Check template compliance for API repositories
+                const templateCompliance = await checkTemplateCompliance(repo, repoType);
+                
                 enrichedRepos.push({
                   ...repo,
                   repo_type: repoType,
@@ -246,7 +387,8 @@ jobs:
                   open_prs_count: openPRs,
                   last_activity_date: lastActivity,
                   detailed_activity: detailedActivityInfo, // Store detailed activity info
-                  simple_activity_date: new Date(repo.updated_at) // Always store simple date for comparison
+                  simple_activity_date: new Date(repo.updated_at), // Always store simple date for comparison
+                  template_compliance: templateCompliance
                 });
                 
                 console.log(`  ✅ Completed ${repo.name}`);
@@ -262,7 +404,8 @@ jobs:
                   open_prs_count: 0,
                   last_activity_date: new Date(repo.updated_at),
                   detailed_activity: null,
-                  simple_activity_date: new Date(repo.updated_at)
+                  simple_activity_date: new Date(repo.updated_at),
+                  template_compliance: { templateUsed: true, violations: [] }
                 });
               }
             }
@@ -330,6 +473,60 @@ jobs:
             report += `- **Incubating APIs**: ${typeStats['Incubating']}\n`;
             report += `- **Working Groups**: ${typeStats['Working Group']}\n`;
             report += `- **Other**: ${typeStats['Other']}\n\n`;
+            
+            // Template Compliance Analysis for API repositories
+            const apiRepos = enrichedRepos.filter(r => ['Sandbox', 'Incubating'].includes(r.repo_type));
+            if (apiRepos.length > 0) {
+              const compliantRepos = apiRepos.filter(r => r.template_compliance.templateUsed);
+              const nonCompliantRepos = apiRepos.filter(r => !r.template_compliance.templateUsed);
+              
+              report += `## Template Compliance Analysis\n\n`;
+              report += `*Analysis of repository description compliance with CAMARA templates*\n\n`;
+              
+              report += `### Summary\n`;
+              report += `- **Total API Repositories**: ${apiRepos.length}\n`;
+              report += `- **Template Compliant**: ${compliantRepos.length} ✅\n`;
+              report += `- **Template Non-Compliant**: ${nonCompliantRepos.length} ❌\n`;
+              report += `- **Compliance Rate**: ${apiRepos.length > 0 ? Math.round((compliantRepos.length / apiRepos.length) * 100) : 0}%\n\n`;
+              
+              if (compliantRepos.length > 0) {
+                report += `### ✅ Template Compliant Repositories\n\n`;
+                report += `| Repository | Type | Description |\n`;
+                report += `|------------|------|-------------|\n`;
+                
+                for (const repo of compliantRepos.sort((a, b) => a.name.localeCompare(b.name))) {
+                  const shortDesc = (repo.description || '').length > 80 ? 
+                    (repo.description || '').substring(0, 80) + '...' : 
+                    (repo.description || 'No description');
+                  report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${shortDesc} |\n`;
+                }
+                report += `\n`;
+              }
+              
+              if (nonCompliantRepos.length > 0) {
+                const templateIssues = [];
+                nonCompliantRepos.forEach(repo => {
+                  repo.template_compliance.violations.forEach(violation => {
+                    templateIssues.push({
+                      repo: repo.name,
+                      repo_type: repo.repo_type,
+                      repo_url: repo.html_url,
+                      check: violation.check,
+                      issue: violation.issue
+                    });
+                  });
+                });
+                
+                report += `### ❌ Template Compliance Issues\n\n`;
+                report += `| Repository | Type | Check | Issue |\n`;
+                report += `|------------|------|-------|-------|\n`;
+                
+                for (const issue of templateIssues.sort((a, b) => a.repo.localeCompare(b.repo))) {
+                  report += `| [${issue.repo}](${issue.repo_url}) | ${issue.repo_type} | ${issue.check} | ${issue.issue} |\n`;
+                }
+                report += `\n`;
+              }
+            }
             
             // Activity Analysis Comparison (only if detailed analysis is enabled)
             if (detailedActivity) {
@@ -455,8 +652,8 @@ jobs:
               if (repos.length === 0) continue;
               
               report += `### ${type} Repositories (${repos.length})\n\n`;
-              report += `| Repository | Visibility | Stars | Language | Open Issues | Open PRs | Last Activity |\n`;
-              report += `|------------|------------|-------|----------|-------------|----------|---------------|\n`;
+              report += `| Repository | Visibility | Stars | Language | Open Issues | Open PRs | Last Activity | Template |\n`;
+              report += `|------------|------------|-------|----------|-------------|----------|---------------|----------|\n`;
               
               for (const repo of repos) {
                 const visibility = repo.private ? 'Private' : 'Public';
@@ -464,8 +661,10 @@ jobs:
                 const language = repo.language || 'N/A';
                 const lastActivity = new Date(repo.last_activity_date).toLocaleDateString();
                 const isArchived = repo.archived ? ' 📦' : '';
+                const templateStatus = ['Sandbox', 'Incubating'].includes(repo.repo_type) ? 
+                  (repo.template_compliance.templateUsed ? '✅' : '❌') : 'N/A';
                 
-                report += `| [${repo.name}](${repo.html_url})${isArchived} | ${visibility} | ${stars} | ${language} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${lastActivity} |\n`;
+                report += `| [${repo.name}](${repo.html_url})${isArchived} | ${visibility} | ${stars} | ${language} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${lastActivity} | ${templateStatus} |\n`;
               }
               report += `\n`;
             }
@@ -484,6 +683,10 @@ jobs:
             console.log(`  - Total open issues: ${stats.totalOpenIssues}`);
             console.log(`  - Total open PRs: ${stats.totalOpenPRs}`);
             console.log(`  - Languages: ${stats.languages.length} (${stats.languages.slice(0, 5).join(', ')}${stats.languages.length > 5 ? '...' : ''})`);
+            if (apiRepos.length > 0) {
+              const compliantRepos = apiRepos.filter(r => r.template_compliance.templateUsed);
+              console.log(`  - Template compliance: ${compliantRepos.length}/${apiRepos.length} API repos compliant`);
+            }
             if (detailedActivity) {
               const significantDifferences = enrichedRepos.filter(r => {
                 const timeDiff = Math.abs(r.last_activity_date - r.simple_activity_date) / (1000 * 60 * 60 * 24);
