@@ -24,6 +24,12 @@ on:
         type: boolean
         default: false
       
+      template_compliance:
+        description: 'Include template compliance checks for API repositories (repository-overview only)'
+        required: false
+        type: boolean
+        default: false
+      
       include_prerelease:
         description: 'Include pre-releases in analysis and reports'
         required: false
@@ -59,10 +65,11 @@ jobs:
             const org = 'camaraproject';
             const includeArchived = '${{ github.event.inputs.include_archived }}' === 'true';
             const detailedActivity = '${{ github.event.inputs.detailed_activity }}' === 'true';
+            const templateCompliance = '${{ github.event.inputs.template_compliance }}' === 'true';
             
             console.log(`🚀 Starting CAMARA repository overview report for ${org}`);
             console.log(`📅 Report generation started at: ${new Date().toISOString()}`);
-            console.log(`⚙️ Configuration: includeArchived=${includeArchived}, detailedActivity=${detailedActivity}`);
+            console.log(`⚙️ Configuration: includeArchived=${includeArchived}, detailedActivity=${detailedActivity}, templateCompliance=${templateCompliance}`);
             
             // Helper function to determine repository type based on topics
             function getRepositoryType(topics) {
@@ -376,8 +383,8 @@ jobs:
                 
                 console.log(`  📅 Last activity: ${lastActivity.toDateString()}${detailedActivity ? ` (${detailedActivityInfo.type})` : ' (simple)'}`);
                 
-                // Check template compliance for API repositories
-                const templateCompliance = await checkTemplateCompliance(repo, repoType);
+                // Check template compliance for API repositories (only if enabled)
+                const templateComplianceResult = templateCompliance ? await checkTemplateCompliance(repo, repoType) : { templateUsed: true, violations: [] };
                 
                 enrichedRepos.push({
                   ...repo,
@@ -388,7 +395,7 @@ jobs:
                   last_activity_date: lastActivity,
                   detailed_activity: detailedActivityInfo, // Store detailed activity info
                   simple_activity_date: new Date(repo.updated_at), // Always store simple date for comparison
-                  template_compliance: templateCompliance
+                  template_compliance: templateComplianceResult
                 });
                 
                 console.log(`  ✅ Completed ${repo.name}`);
@@ -431,6 +438,7 @@ jobs:
               report += `**Archived Repositories Excluded**: ${allRepos.length - enrichedRepos.length}\n`;
             }
             report += `**Detailed Activity Analysis**: ${detailedActivity ? 'Enabled' : 'Disabled (using repository updated_at)'}\n`;
+            report += `**Template Compliance Checks**: ${templateCompliance ? 'Enabled' : 'Disabled'}\n`;
             report += `\n`;
             
             // Repository type statistics
@@ -652,8 +660,15 @@ jobs:
               if (repos.length === 0) continue;
               
               report += `### ${type} Repositories (${repos.length})\n\n`;
-              report += `| Repository | Visibility | Stars | Language | Open Issues | Open PRs | Last Activity | Template |\n`;
-              report += `|------------|------------|-------|----------|-------------|----------|---------------|----------|\n`;
+              
+              // Conditional headers based on template compliance setting
+              if (templateCompliance) {
+                report += `| Repository | Visibility | Stars | Language | Open Issues | Open PRs | Last Activity | Template |\n`;
+                report += `|------------|------------|-------|----------|-------------|----------|---------------|----------|\n`;
+              } else {
+                report += `| Repository | Visibility | Stars | Language | Open Issues | Open PRs | Last Activity |\n`;
+                report += `|------------|------------|-------|----------|-------------|----------|---------------|\n`;
+              }
               
               for (const repo of repos) {
                 const visibility = repo.private ? 'Private' : 'Public';
@@ -661,10 +676,18 @@ jobs:
                 const language = repo.language || 'N/A';
                 const lastActivity = new Date(repo.last_activity_date).toLocaleDateString();
                 const isArchived = repo.archived ? ' 📦' : '';
-                const templateStatus = ['Sandbox', 'Incubating'].includes(repo.repo_type) ? 
-                  (repo.template_compliance.templateUsed ? '✅' : '❌') : 'N/A';
                 
-                report += `| [${repo.name}](${repo.html_url})${isArchived} | ${visibility} | ${stars} | ${language} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${lastActivity} | ${templateStatus} |\n`;
+                let row = `| [${repo.name}](${repo.html_url})${isArchived} | ${visibility} | ${stars} | ${language} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${lastActivity}`;
+                
+                // Add template compliance column only if enabled
+                if (templateCompliance) {
+                  const templateStatus = ['Sandbox', 'Incubating'].includes(repo.repo_type) ? 
+                    (repo.template_compliance.templateUsed ? '✅' : '❌') : 'N/A';
+                  row += ` | ${templateStatus}`;
+                }
+                
+                row += ' |\n';
+                report += row;
               }
               report += `\n`;
             }
@@ -683,7 +706,7 @@ jobs:
             console.log(`  - Total open issues: ${stats.totalOpenIssues}`);
             console.log(`  - Total open PRs: ${stats.totalOpenPRs}`);
             console.log(`  - Languages: ${stats.languages.length} (${stats.languages.slice(0, 5).join(', ')}${stats.languages.length > 5 ? '...' : ''})`);
-            if (apiRepos.length > 0) {
+            if (templateCompliance && apiRepos.length > 0) {
               const compliantRepos = apiRepos.filter(r => r.template_compliance.templateUsed);
               console.log(`  - Template compliance: ${compliantRepos.length}/${apiRepos.length} API repos compliant`);
             }
