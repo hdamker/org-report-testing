@@ -159,11 +159,14 @@ jobs:
           script: |
             console.log('📝 Generating simple report...');
             
+            const reportType = '${{ github.event.inputs.report_type }}';
+            const templateCompliance = '${{ github.event.inputs.template_compliance }}';
+            
             const report = `# CAMARA Test Report
             
 **Generated**: ${new Date().toISOString()}
-**Report Type**: ${{ github.event.inputs.report_type }}
-**Template Compliance**: ${{ github.event.inputs.template_compliance }}
+**Report Type**: ${reportType}
+**Template Compliance**: ${templateCompliance}
 
 ## Test Results
 
