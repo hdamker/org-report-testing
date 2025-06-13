@@ -251,6 +251,29 @@ Meta-releases are categorized based on first release timing:
 - **Version Consistency**: Main branch vs. latest release comparisons
 - **Documentation Issues**: Missing version information in release notes
 - **API Evolution**: Version progression tracking
+- **Template Compliance**: Comprehensive verification that repositories follow CAMARA template standards
+
+### Template Compliance Checks
+
+The workflow automatically verifies that API repositories follow CAMARA template standards:
+
+**For Sandbox API Repositories:**
+- ✅ README must not contain "family" or "families" terms
+- ✅ Repository description must not contain "family" or "families" terms  
+- ✅ Repository description starts with "Sandbox"
+- ✅ Website points to "https://lf-camaraproject.atlassian.net/"
+- ✅ Line 8 of README contains correct Sandbox badge: `<a href="https://github.com/camaraproject/Governance/blob/main/ProjectStructureAndRoles.md" title="Sandbox API Repository"><img src="https://img.shields.io/badge/Sandbox%20API%20Repository-yellow?style=plastic"></a>`
+- ✅ README contains line starting with "Sandbox API Repository to describe, develop, document, and test"
+
+**For Incubating API Repositories:**
+- ✅ README must not contain "family" or "families" terms
+- ✅ Repository description must not contain "family" or "families" terms  
+- ✅ Repository description starts with "Incubating"
+- ✅ Website points to "https://lf-camaraproject.atlassian.net/"
+- ✅ Line 8 of README contains correct Incubating badge: `<a href="https://github.com/camaraproject/Governance/blob/main/ProjectStructureAndRoles.md" title="Incubating API Repository"><img src="https://img.shields.io/badge/Incubating%20API%20Repository-green?style=plastic"></a>`
+- ✅ README contains line starting with "Incubating API Repository to evolve and maintain the definitions and documentation"
+
+Repositories passing all checks receive a "Template used ✅" status. Individual violations are listed in the Template Compliance Analysis section.
 
 ### Understanding API Counts
 
@@ -425,6 +448,12 @@ A: Repositories that have releases but only pre-release versions, no public rele
 
 **Q: How are meta-releases determined?**
 A: Based on the first release date in each major version cycle. APIs first released in August/September are categorized as Fall releases, February/March as Spring releases.
+
+**Q: What does "Template used ✅" mean?**
+A: This indicates that an API repository follows all CAMARA template standards, including proper README and description format, correct badges, website links, and absence of deprecated "family/families" terminology.
+
+**Q: Why do some repositories show template compliance violations?**
+A: The workflow checks API repositories against comprehensive CAMARA template standards. Common violations include using deprecated "family" terminology, incorrect badges on line 8 of README, wrong website URLs, or missing descriptive lines in README files.
 
 ### Troubleshooting
 
