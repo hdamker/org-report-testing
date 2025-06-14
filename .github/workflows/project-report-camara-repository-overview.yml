@@ -28,9 +28,23 @@ on:
 jobs:
   generate-repository-overview:
     runs-on: ubuntu-latest
+    outputs:
+      total_repos: ${{ steps.generate-report.outputs.total_repos }}
+      sandbox_repos: ${{ steps.generate-report.outputs.sandbox_repos }}
+      incubating_repos: ${{ steps.generate-report.outputs.incubating_repos }}
+      working_group_repos: ${{ steps.generate-report.outputs.working_group_repos }}
+      other_repos: ${{ steps.generate-report.outputs.other_repos }}
+      total_languages: ${{ steps.generate-report.outputs.total_languages }}
+      total_open_issues: ${{ steps.generate-report.outputs.total_open_issues }}
+      total_open_prs: ${{ steps.generate-report.outputs.total_open_prs }}
+      archived_excluded: ${{ steps.generate-report.outputs.archived_excluded }}
+      detailed_activity_enabled: ${{ steps.generate-report.outputs.detailed_activity_enabled }}
+      template_compliance_enabled: ${{ steps.generate-report.outputs.template_compliance_enabled }}
+      compliance_rate: ${{ steps.generate-report.outputs.compliance_rate }}
+      compliant_repos: ${{ steps.generate-report.outputs.compliant_repos }}
+      total_api_repos: ${{ steps.generate-report.outputs.total_api_repos }}
     steps:
       - name: Initialize Repository Overview Report
-        id: initialize
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.CAMARA_TOKEN || secrets.GITHUB_TOKEN }}
@@ -40,9 +54,8 @@ jobs:
             const detailedActivity = '${{ github.event.inputs.detailed_activity }}' === 'true';
             const checkTemplateCompliance = '${{ github.event.inputs.template_compliance }}' === 'true';
             
-            console.log('🚀 Starting CAMARA repository overview report for ' + org);
-            console.log('📅 Report generation started at: ' + new Date().toISOString());
-            console.log('⚙️ Configuration: includeArchived=' + includeArchived + ', detailedActivity=' + detailedActivity + ', templateCompliance=' + checkTemplateCompliance);
+            console.log('🚀 Starting CAMARA repository overview report');
+            console.log('⚙️ Configuration:', { includeArchived, detailedActivity, checkTemplateCompliance });
 
       - name: Fetch All Repositories
         uses: actions/github-script@v7
@@ -52,14 +65,13 @@ jobs:
             const org = 'camaraproject';
             const includeArchived = '${{ github.event.inputs.include_archived }}' === 'true';
             
-            console.log('🔍 Step 1: Fetching all repositories from ' + org + '...');
+            console.log('🔍 Fetching repositories from', org);
             
-            // Get all repositories
+            // Paginate through all repositories
             let allRepos = [];
             let page = 1;
             
             while (true) {
-              console.log('  📥 Fetching repositories page ' + page + '...');
               const response = await github.rest.repos.listForOrg({
                 org: org,
                 type: 'all',
@@ -69,25 +81,24 @@ jobs:
               });
               
               if (response.data.length === 0) break;
-              console.log('  📊 Page ' + page + ': ' + response.data.length + ' repositories');
               allRepos = allRepos.concat(response.data);
               page++;
             }
             
-            console.log('✅ Step 1 Complete: Found ' + allRepos.length + ' total repositories');
+            console.log(`✅ Found ${allRepos.length} total repositories`);
             
-            // Filter repositories
+            // Filter archived repositories if requested
             const filteredRepos = includeArchived ? allRepos : allRepos.filter(r => !r.archived);
-            console.log('🔍 Processing ' + filteredRepos.length + ' repositories' + (includeArchived ? '' : ' (excluding archived)'));
+            console.log(`🔍 Processing ${filteredRepos.length} repositories${includeArchived ? '' : ' (excluding archived)'}`);
             
-            // Save for next step
+            // Save configuration and data for next steps
             const fs = require('fs');
             fs.writeFileSync('repositories-data.json', JSON.stringify({
-              filteredRepos: filteredRepos,
+              filteredRepos,
               allReposCount: allRepos.length,
               config: {
-                org: org,
-                includeArchived: includeArchived,
+                org,
+                includeArchived,
                 detailedActivity: '${{ github.event.inputs.detailed_activity }}' === 'true',
                 checkTemplateCompliance: '${{ github.event.inputs.template_compliance }}' === 'true'
               }
@@ -103,7 +114,7 @@ jobs:
             const { filteredRepos, config } = data;
             const { org, detailedActivity } = config;
             
-            // Helper function to determine repository type
+            // Helper function to categorize repositories by topics
             function getRepositoryType(topics) {
               if (topics.includes('sandbox-api-repository')) return 'Sandbox';
               if (topics.includes('incubating-api-repository')) return 'Incubating';
@@ -111,22 +122,21 @@ jobs:
               return 'Other';
             }
             
-            console.log('🔍 Step 2: Processing repository data...');
+            console.log('🔍 Processing repository data...');
             if (detailedActivity) {
-              console.log('⚠️ Detailed activity analysis enabled - this will take longer but provide more accurate activity dates');
+              console.log('⚠️ Detailed activity analysis enabled - slower but more accurate');
             }
             
-            // Process repositories in batches to avoid timeout
             const enrichedRepos = [];
-            const batchSize = 15;
+            const batchSize = 15; // Process in batches to avoid API timeouts
             
             for (let i = 0; i < filteredRepos.length; i += batchSize) {
               const batch = filteredRepos.slice(i, i + batchSize);
-              console.log('📦 Processing batch ' + Math.floor(i/batchSize + 1) + ' (' + (i + 1) + '-' + Math.min(i + batchSize, filteredRepos.length) + ')...');
+              console.log(`📦 Processing batch ${Math.floor(i/batchSize + 1)} (${i + 1}-${Math.min(i + batchSize, filteredRepos.length)})`);
               
               for (const repo of batch) {
                 try {
-                  // Get repository topics
+                  // Get repository topics for categorization
                   const topics = await github.rest.repos.getAllTopics({
                     owner: org,
                     repo: repo.name
@@ -134,7 +144,7 @@ jobs:
                   
                   const repoType = getRepositoryType(topics.data.names);
                   
-                  // Get open PRs count
+                  // Get separate counts for open PRs and issues
                   const openPRsResponse = await github.rest.pulls.list({
                     owner: org,
                     repo: repo.name,
@@ -142,15 +152,13 @@ jobs:
                     per_page: 100
                   });
                   const openPRs = openPRsResponse.data.length;
-                  
-                  // Calculate open issues count
                   const openIssues = Math.max(0, (repo.open_issues_count || 0) - openPRs);
                   
-                  // Detailed activity analysis if enabled
+                  // Activity analysis: simple vs detailed mode
                   let lastActivity = new Date(repo.updated_at);
                   if (detailedActivity) {
                     try {
-                      // Check recent commits
+                      // Check actual commits for more accurate activity date
                       const commits = await github.rest.repos.listCommits({
                         owner: org,
                         repo: repo.name,
@@ -158,12 +166,10 @@ jobs:
                       });
                       if (commits.data.length > 0) {
                         const commitDate = new Date(commits.data[0].commit.committer.date);
-                        if (commitDate > lastActivity) {
-                          lastActivity = commitDate;
-                        }
+                        if (commitDate > lastActivity) lastActivity = commitDate;
                       }
                       
-                      // Check recent issues
+                      // Check recent issue activity
                       const issues = await github.rest.issues.listForRepo({
                         owner: org,
                         repo: repo.name,
@@ -173,12 +179,10 @@ jobs:
                       });
                       if (issues.data.length > 0) {
                         const issueDate = new Date(issues.data[0].updated_at);
-                        if (issueDate > lastActivity) {
-                          lastActivity = issueDate;
-                        }
+                        if (issueDate > lastActivity) lastActivity = issueDate;
                       }
                     } catch (activityError) {
-                      console.log('    ⚠️ Could not get detailed activity for ' + repo.name);
+                      console.log(`    ⚠️ Could not get detailed activity for ${repo.name}`);
                     }
                   }
                   
@@ -202,8 +206,8 @@ jobs:
                   });
                   
                 } catch (error) {
-                  console.log('  ❌ Error processing ' + repo.name + ': ' + error.message);
-                  // Add with minimal data if API calls fail
+                  console.log(`❌ Error processing ${repo.name}: ${error.message}`);
+                  // Add minimal data if API calls fail
                   enrichedRepos.push({
                     name: repo.name,
                     full_name: repo.full_name,
@@ -226,9 +230,9 @@ jobs:
               }
             }
             
-            console.log('✅ Step 2 Complete: Repository processing finished');
+            console.log('✅ Repository processing completed');
             
-            // Save enriched data
+            // Save enriched data for next steps
             data.enrichedRepos = enrichedRepos;
             fs.writeFileSync('enriched-repositories.json', JSON.stringify(data));
 
@@ -243,24 +247,24 @@ jobs:
             let { enrichedRepos, config } = data;
             const { org } = config;
             
-            console.log('🔍 Checking template compliance for API repositories...');
+            console.log('📋 Checking template compliance for API repositories...');
             
-            // Enhanced template compliance function
+            // Comprehensive template compliance verification
             async function checkTemplateCompliance(repo, repoType) {
               const compliance = {
                 templateUsed: true,
                 violations: []
               };
               
+              // Only check API repositories (Sandbox/Incubating)
               if (!['Sandbox', 'Incubating'].includes(repoType)) {
                 return compliance;
               }
               
-              console.log('      🔍 Checking template compliance for ' + repo.name + ' (' + repoType + ')...');
-              
+              console.log(`🔍 Checking ${repo.name} (${repoType})`);
               const description = repo.description || '';
               
-              // Check 1: Description should not contain "family" terms
+              // Check 1: No "family" terms in description
               if (description.toLowerCase().includes('family')) {
                 compliance.violations.push({
                   check: 'Family terms in description',
@@ -269,25 +273,25 @@ jobs:
                 compliance.templateUsed = false;
               }
               
-              // Check 2: Description format
+              // Check 2: Description format validation
               if (!description.startsWith(repoType)) {
                 compliance.violations.push({
                   check: 'Description format',
-                  issue: 'Repository description should start with "' + repoType + '". Current: "' + description + '"'
+                  issue: `Repository description should start with "${repoType}". Current: "${description}"`
                 });
                 compliance.templateUsed = false;
               }
               
-              // Check 3: Website URL
+              // Check 3: Website URL validation
               if (!repo.homepage || !repo.homepage.startsWith('https://lf-camaraproject.atlassian.net/')) {
                 compliance.violations.push({
                   check: 'Website URL',
-                  issue: 'Website should point to "https://lf-camaraproject.atlassian.net/". Current: "' + (repo.homepage || 'No website') + '"'
+                  issue: `Website should point to "https://lf-camaraproject.atlassian.net/". Current: "${repo.homepage || 'No website'}"`
                 });
                 compliance.templateUsed = false;
               }
               
-              // Check 4-6: README checks (enhanced functionality)
+              // Check 4-6: README content validation
               try {
                 const readmeResponse = await github.rest.repos.getContent({
                   owner: org,
@@ -297,7 +301,7 @@ jobs:
                 const readmeContent = Buffer.from(readmeResponse.data.content, 'base64').toString('utf8');
                 const readmeLines = readmeContent.split('\n');
                 
-                // Check 4: README should not contain "family" terms
+                // Check 4: No "family" terms in README
                 if (readmeContent.toLowerCase().includes('family')) {
                   compliance.violations.push({
                     check: 'Family terms in README',
@@ -306,7 +310,7 @@ jobs:
                   compliance.templateUsed = false;
                 }
                 
-                // Check 5: Badge line (line 8)
+                // Check 5: Badge line verification (line 8)
                 const line8 = readmeLines.length >= 8 ? readmeLines[7].trim() : '';
                 const hasCorrectBadge = line8.includes('ProjectStructureAndRoles.md') && 
                                        line8.includes(repoType) && 
@@ -315,12 +319,12 @@ jobs:
                 if (!hasCorrectBadge) {
                   compliance.violations.push({
                     check: 'Badge line (line 8)',
-                    issue: 'Line 8 of README.md should contain the ' + repoType + ' API Repository badge'
+                    issue: `Line 8 of README.md should contain the ${repoType} API Repository badge`
                   });
                   compliance.templateUsed = false;
                 }
                 
-                // Check 6: Descriptive line
+                // Check 6: Descriptive line validation
                 const expectedLineStart = repoType === 'Sandbox'
                   ? 'Sandbox API Repository to describe, develop, document, and test'
                   : 'Incubating API Repository to evolve and maintain the definitions and documentation';
@@ -332,7 +336,7 @@ jobs:
                 if (!hasExpectedLine) {
                   compliance.violations.push({
                     check: 'Descriptive line in README',
-                    issue: 'README.md should contain a line starting with "' + expectedLineStart + '"'
+                    issue: `README.md should contain a line starting with "${expectedLineStart}"`
                   });
                   compliance.templateUsed = false;
                 }
@@ -348,25 +352,23 @@ jobs:
               return compliance;
             }
             
-            // Check compliance for API repositories
+            // Process compliance checks for API repositories
             for (let i = 0; i < enrichedRepos.length; i++) {
               const repo = enrichedRepos[i];
               if (['Sandbox', 'Incubating'].includes(repo.repo_type)) {
-                console.log('📋 Checking compliance for ' + repo.name + ' (' + repo.repo_type + ')...');
                 enrichedRepos[i].template_compliance = await checkTemplateCompliance(repo, repo.repo_type);
                 
                 const passed = enrichedRepos[i].template_compliance.templateUsed;
                 const violations = enrichedRepos[i].template_compliance.violations.length;
-                console.log('  📊 ' + repo.name + ': ' + (passed ? '✅ PASSED' : '❌ FAILED') + ' (' + violations + ' violations)');
+                console.log(`📊 ${repo.name}: ${passed ? '✅ PASSED' : '❌ FAILED'} (${violations} violations)`);
               } else {
                 enrichedRepos[i].template_compliance = { templateUsed: true, violations: [] };
               }
             }
             
-            // Save updated data
+            // Save updated data with compliance results
             data.enrichedRepos = enrichedRepos;
             fs.writeFileSync('enriched-repositories.json', JSON.stringify(data));
-            
             console.log('✅ Template compliance checking completed');
 
       - name: Generate Final Report
@@ -379,21 +381,9 @@ jobs:
             const { enrichedRepos, allReposCount, config } = data;
             const { org, includeArchived, detailedActivity, checkTemplateCompliance } = config;
             
-            console.log('📝 Step 3: Generating comprehensive report...');
+            console.log('📝 Generating comprehensive report...');
             
-            // Generate report using string concatenation
-            let report = '# CAMARA Project Repository Overview\n\n';
-            report += '**Generated**: ' + new Date().toISOString() + '\n';
-            report += '**Organization**: ' + org + '\n';
-            report += '**Total Repositories**: ' + enrichedRepos.length + '\n';
-            if (!includeArchived && allReposCount) {
-              report += '**Archived Repositories Excluded**: ' + (allReposCount - enrichedRepos.length) + '\n';
-            }
-            report += '**Detailed Activity Analysis**: ' + (detailedActivity ? 'Enabled' : 'Disabled (using repository updated_at)') + '\n';
-            report += '**Template Compliance Checks**: ' + (checkTemplateCompliance ? 'Enabled' : 'Disabled') + '\n';
-            report += '\n';
-            
-            // Repository type statistics
+            // Calculate repository type statistics
             const typeStats = {
               'Sandbox': enrichedRepos.filter(r => r.repo_type === 'Sandbox').length,
               'Incubating': enrichedRepos.filter(r => r.repo_type === 'Incubating').length,
@@ -401,7 +391,7 @@ jobs:
               'Other': enrichedRepos.filter(r => r.repo_type === 'Other').length
             };
             
-            // General statistics
+            // Calculate general statistics
             const stats = {
               total: enrichedRepos.length,
               public: enrichedRepos.filter(r => !r.private).length,
@@ -412,24 +402,66 @@ jobs:
               totalOpenPRs: enrichedRepos.reduce((acc, r) => acc + r.open_prs_count, 0)
             };
             
+            // Calculate template compliance statistics (if enabled)
+            const apiRepos = enrichedRepos.filter(r => ['Sandbox', 'Incubating'].includes(r.repo_type));
+            let complianceStats = null;
+            if (checkTemplateCompliance && apiRepos.length > 0) {
+              const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
+              complianceStats = {
+                total: apiRepos.length,
+                compliant: compliantRepos.length,
+                nonCompliant: apiRepos.length - compliantRepos.length,
+                rate: Math.round((compliantRepos.length / apiRepos.length) * 100)
+              };
+            }
+            
+            // Set outputs for workflow summary
+            core.setOutput('total_repos', stats.total);
+            core.setOutput('sandbox_repos', typeStats['Sandbox']);
+            core.setOutput('incubating_repos', typeStats['Incubating']);
+            core.setOutput('working_group_repos', typeStats['Working Group']);
+            core.setOutput('other_repos', typeStats['Other']);
+            core.setOutput('total_languages', stats.languages.length);
+            core.setOutput('total_open_issues', stats.totalOpenIssues);
+            core.setOutput('total_open_prs', stats.totalOpenPRs);
+            core.setOutput('archived_excluded', includeArchived ? 0 : (allReposCount - enrichedRepos.length));
+            core.setOutput('detailed_activity_enabled', detailedActivity);
+            core.setOutput('template_compliance_enabled', checkTemplateCompliance);
+            if (complianceStats) {
+              core.setOutput('compliance_rate', complianceStats.rate);
+              core.setOutput('compliant_repos', complianceStats.compliant);
+              core.setOutput('total_api_repos', complianceStats.total);
+            }
+            
+            // Generate Markdown report
+            let report = '# CAMARA Project Repository Overview\n\n';
+            report += `**Generated**: ${new Date().toISOString()}\n`;
+            report += `**Organization**: ${org}\n`;
+            report += `**Total Repositories**: ${stats.total}\n`;
+            if (!includeArchived && allReposCount) {
+              report += `**Archived Repositories Excluded**: ${allReposCount - stats.total}\n`;
+            }
+            report += `**Detailed Activity Analysis**: ${detailedActivity ? 'Enabled' : 'Disabled (using repository updated_at)'}\n`;
+            report += `**Template Compliance Checks**: ${checkTemplateCompliance ? 'Enabled' : 'Disabled'}\n\n`;
+            
+            // Repository Statistics Section
             report += '## Repository Statistics\n\n';
             report += '### General Statistics\n';
-            report += '- **Total Repositories**: ' + stats.total + '\n';
-            report += '- **Public**: ' + stats.public + '\n';
-            report += '- **Private**: ' + stats.private + '\n';
-            if (stats.archived > 0) report += '- **Archived**: ' + stats.archived + '\n';
-            report += '- **Programming Languages**: ' + stats.languages.length + ' (' + stats.languages.join(', ') + ')\n';
-            report += '- **Total Open Issues**: ' + stats.totalOpenIssues + '\n';
-            report += '- **Total Open Pull Requests**: ' + stats.totalOpenPRs + '\n\n';
+            report += `- **Total Repositories**: ${stats.total}\n`;
+            report += `- **Public**: ${stats.public}\n`;
+            report += `- **Private**: ${stats.private}\n`;
+            if (stats.archived > 0) report += `- **Archived**: ${stats.archived}\n`;
+            report += `- **Programming Languages**: ${stats.languages.length} (${stats.languages.join(', ')})\n`;
+            report += `- **Total Open Issues**: ${stats.totalOpenIssues}\n`;
+            report += `- **Total Open Pull Requests**: ${stats.totalOpenPRs}\n\n`;
             
             report += '### Repository Types\n';
-            report += '- **Sandbox APIs**: ' + typeStats['Sandbox'] + '\n';
-            report += '- **Incubating APIs**: ' + typeStats['Incubating'] + '\n';
-            report += '- **Working Groups**: ' + typeStats['Working Group'] + '\n';
-            report += '- **Other**: ' + typeStats['Other'] + '\n\n';
+            report += `- **Sandbox APIs**: ${typeStats['Sandbox']}\n`;
+            report += `- **Incubating APIs**: ${typeStats['Incubating']}\n`;
+            report += `- **Working Groups**: ${typeStats['Working Group']}\n`;
+            report += `- **Other**: ${typeStats['Other']}\n\n`;
             
-            // Template compliance analysis (only if enabled)
-            const apiRepos = enrichedRepos.filter(r => ['Sandbox', 'Incubating'].includes(r.repo_type));
+            // Template Compliance Section (if enabled)
             if (checkTemplateCompliance && apiRepos.length > 0) {
               const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
               const nonCompliantRepos = apiRepos.filter(r => r.template_compliance && !r.template_compliance.templateUsed);
@@ -438,10 +470,10 @@ jobs:
               report += '*Analysis of repository compliance with CAMARA templates*\n\n';
               
               report += '### Summary\n';
-              report += '- **Total API Repositories**: ' + apiRepos.length + '\n';
-              report += '- **Template Compliant**: ' + compliantRepos.length + ' ✅\n';
-              report += '- **Template Non-Compliant**: ' + nonCompliantRepos.length + ' ❌\n';
-              report += '- **Compliance Rate**: ' + (apiRepos.length > 0 ? Math.round((compliantRepos.length / apiRepos.length) * 100) : 0) + '%\n\n';
+              report += `- **Total API Repositories**: ${apiRepos.length}\n`;
+              report += `- **Template Compliant**: ${compliantRepos.length} ✅\n`;
+              report += `- **Template Non-Compliant**: ${nonCompliantRepos.length} ❌\n`;
+              report += `- **Compliance Rate**: ${complianceStats.rate}%\n\n`;
               
               if (compliantRepos.length > 0) {
                 report += '### ✅ Template Compliant Repositories\n\n';
@@ -452,7 +484,7 @@ jobs:
                   const shortDesc = (repo.description || '').length > 80 ? 
                     (repo.description || '').substring(0, 80) + '...' : 
                     (repo.description || 'No description');
-                  report += '| [' + repo.name + '](' + repo.html_url + ') | ' + repo.repo_type + ' | ' + shortDesc + ' |\n';
+                  report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${shortDesc} |\n`;
                 }
                 report += '\n';
               }
@@ -465,7 +497,7 @@ jobs:
                 for (const repo of nonCompliantRepos) {
                   if (repo.template_compliance && repo.template_compliance.violations) {
                     for (const violation of repo.template_compliance.violations) {
-                      report += '| [' + repo.name + '](' + repo.html_url + ') | ' + repo.repo_type + ' | ' + violation.check + ' | ' + violation.issue + ' |\n';
+                      report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${violation.check} | ${violation.issue} |\n`;
                     }
                   }
                 }
@@ -473,7 +505,7 @@ jobs:
               }
             }
             
-            // Activity comparison (only if detailed activity is enabled)
+            // Activity Comparison Section (if detailed mode enabled)
             if (detailedActivity) {
               report += '## Activity Date Comparison\n\n';
               report += '*Comparing GitHub updated_at vs detailed activity analysis*\n\n';
@@ -496,7 +528,7 @@ jobs:
               const significantDifferences = repositories.filter(r => r.days_difference > 1);
               
               report += '### Summary\n';
-              report += '- **Repositories with significant differences (>1 day)**: ' + significantDifferences.length + '\n\n';
+              report += `- **Repositories with significant differences (>1 day)**: ${significantDifferences.length}\n\n`;
               
               if (significantDifferences.length > 0) {
                 report += '### Repositories with Significant Date Differences\n\n';
@@ -508,31 +540,31 @@ jobs:
                   const detailedFormatted = repo.detailed_date.toLocaleDateString();
                   const daysDiff = Math.round(repo.days_difference);
                   
-                  report += '| [' + repo.name + '](' + repo.html_url + ') | ' + repo.repo_type + ' | ' + simpleFormatted + ' | ' + detailedFormatted + ' | ' + daysDiff + ' days |\n';
+                  report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${simpleFormatted} | ${detailedFormatted} | ${daysDiff} days |\n`;
                 }
                 report += '\n';
               }
             }
             
-            // Top repositories by stars
-            const topStarred = enrichedRepos
+            // Top Repositories by Stars Section
+            const starredRepos = enrichedRepos
               .sort((a, b) => b.stargazers_count - a.stargazers_count)
               .slice(0, 10)
               .filter(r => r.stargazers_count > 0);
             
-            if (topStarred.length > 0) {
+            if (starredRepos.length > 0) {
               report += '## Top Repositories by Stars\n\n';
               report += '| Repository | Type | Stars | Language | Open Issues | Open PRs |\n';
               report += '|------------|------|-------|----------|-------------|----------|\n';
               
-              for (const repo of topStarred) {
+              for (const repo of starredRepos) {
                 const language = repo.language || 'N/A';
-                report += '| [' + repo.name + '](' + repo.html_url + ') | ' + repo.repo_type + ' | ' + repo.stargazers_count + ' | ' + language + ' | ' + repo.open_issues_count + ' | ' + repo.open_prs_count + ' |\n';
+                report += `| [${repo.name}](${repo.html_url}) | ${repo.repo_type} | ${repo.stargazers_count} | ${language} | ${repo.open_issues_count} | ${repo.open_prs_count} |\n`;
               }
               report += '\n';
             }
             
-            // Recently active repositories
+            // Recently Active Repositories Section
             const recentlyActive = enrichedRepos
               .sort((a, b) => new Date(b.last_activity_date) - new Date(a.last_activity_date))
               .slice(0, 15);
@@ -540,8 +572,8 @@ jobs:
             const activityTitle = detailedActivity ? 'Most Recently Active Repositories' : 'Recently Updated Repositories';
             const activityNote = detailedActivity ? '*Based on detailed activity analysis*' : '*Based on repository updated_at timestamp*';
             
-            report += '## ' + activityTitle + '\n\n';
-            report += activityNote + '\n\n';
+            report += `## ${activityTitle}\n\n`;
+            report += `${activityNote}\n\n`;
             report += '| Repository | Type | Last Activity | Open Issues | Open PRs | Language |\n';
             report += '|------------|------|---------------|-------------|----------|----------|\n';
             
@@ -550,11 +582,11 @@ jobs:
               const language = repo.language || 'N/A';
               const isArchived = repo.archived ? ' 📦' : '';
               
-              report += '| [' + repo.name + '](' + repo.html_url + ')' + isArchived + ' | ' + repo.repo_type + ' | ' + lastActivity + ' | ' + repo.open_issues_count + ' | ' + repo.open_prs_count + ' | ' + language + ' |\n';
+              report += `| [${repo.name}](${repo.html_url})${isArchived} | ${repo.repo_type} | ${lastActivity} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${language} |\n`;
             }
             report += '\n';
             
-            // Complete repository list grouped by type
+            // Complete Repository List Section
             const reposByType = {
               'Working Group': enrichedRepos.filter(r => r.repo_type === 'Working Group').sort((a, b) => a.name.localeCompare(b.name)),
               'Incubating': enrichedRepos.filter(r => r.repo_type === 'Incubating').sort((a, b) => a.name.localeCompare(b.name)),
@@ -567,8 +599,9 @@ jobs:
             for (const [type, repos] of Object.entries(reposByType)) {
               if (repos.length === 0) continue;
               
-              report += '### ' + type + ' Repositories (' + repos.length + ')\n\n';
+              report += `### ${type} Repositories (${repos.length})\n\n`;
               
+              // Dynamic table headers based on template compliance feature
               if (checkTemplateCompliance) {
                 report += '| Repository | Visibility | Stars | Language | Open Issues | Open PRs | Last Activity | Template |\n';
                 report += '|------------|------------|-------|----------|-------------|----------|---------------|----------|\n';
@@ -579,19 +612,18 @@ jobs:
               
               for (const repo of repos) {
                 const visibility = repo.private ? 'Private' : 'Public';
-                const stars = repo.stargazers_count;
                 const language = repo.language || 'N/A';
                 const lastActivity = new Date(repo.last_activity_date).toLocaleDateString();
                 const isArchived = repo.archived ? ' 📦' : '';
                 
-                let row = '| [' + repo.name + '](' + repo.html_url + ')' + isArchived + ' | ' + visibility + ' | ' + stars + ' | ' + language + ' | ' + repo.open_issues_count + ' | ' + repo.open_prs_count + ' | ' + lastActivity;
+                let row = `| [${repo.name}](${repo.html_url})${isArchived} | ${visibility} | ${repo.stargazers_count} | ${language} | ${repo.open_issues_count} | ${repo.open_prs_count} | ${lastActivity}`;
                 
                 if (checkTemplateCompliance) {
                   let templateStatus = 'N/A';
                   if (['Sandbox', 'Incubating'].includes(repo.repo_type)) {
                     templateStatus = (repo.template_compliance && repo.template_compliance.templateUsed) ? '✅' : '❌';
                   }
-                  row += ' | ' + templateStatus;
+                  row += ` | ${templateStatus}`;
                 }
                 
                 row += ' |\n';
@@ -600,29 +632,25 @@ jobs:
               report += '\n';
             }
             
-            console.log('💾 Saving report to file...');
-            // Save report
+            // Save report to file
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const filename = 'camara-repository-overview-' + timestamp.split('T')[0] + '.md';
+            const filename = `camara-repository-overview-${timestamp.split('T')[0]}.md`;
             fs.writeFileSync(filename, report);
             
-            console.log('✅ Repository overview report saved as ' + filename);
+            // Log final statistics
+            console.log(`✅ Repository overview report saved as ${filename}`);
             console.log('📊 Final Report Statistics:');
-            console.log('  - Total repositories: ' + enrichedRepos.length);
-            console.log('  - Repository types: Sandbox:' + typeStats['Sandbox'] + ', Incubating:' + typeStats['Incubating'] + ', WorkingGroup:' + typeStats['Working Group'] + ', Other:' + typeStats['Other']);
-            console.log('  - Total open issues: ' + stats.totalOpenIssues);
-            console.log('  - Total open PRs: ' + stats.totalOpenPRs);
-            console.log('  - Languages: ' + stats.languages.length);
-            if (checkTemplateCompliance && apiRepos.length > 0) {
-              const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
-              console.log('  - Template compliance: ' + compliantRepos.length + '/' + apiRepos.length + ' API repos compliant');
+            console.log(`  - Total repositories: ${stats.total}`);
+            console.log(`  - Repository types: Sandbox:${typeStats['Sandbox']}, Incubating:${typeStats['Incubating']}, WorkingGroup:${typeStats['Working Group']}, Other:${typeStats['Other']}`);
+            console.log(`  - Total open issues: ${stats.totalOpenIssues}`);
+            console.log(`  - Total open PRs: ${stats.totalOpenPRs}`);
+            console.log(`  - Languages: ${stats.languages.length}`);
+            if (complianceStats) {
+              console.log(`  - Template compliance: ${complianceStats.compliant}/${complianceStats.total} API repos compliant (${complianceStats.rate}%)`);
             }
             
-            // Set output for artifact upload
             core.setOutput('report_filename', filename);
-            
             console.log('🎉 Repository overview report generation completed successfully!');
-            console.log('⏱️ Report generation finished at: ' + new Date().toISOString());
 
       - name: Upload Repository Overview Report
         uses: actions/upload-artifact@v4
@@ -636,13 +664,60 @@ jobs:
     needs: [generate-repository-overview]
     runs-on: ubuntu-latest
     steps:
-      - name: Report Summary
+      - name: Generate Workflow Summary
         run: |
-          echo "🎉 CAMARA Repository Overview Complete" >> $GITHUB_STEP_SUMMARY
+          echo "# 🎉 CAMARA Repository Overview Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Generated At**: $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "**Job Status**: ${{ needs.generate-repository-overview.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Download**: Check the artifacts section of this workflow run" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "✅ CAMARA repository overview workflow completed"
-          echo "📅 Completed at: $(date -u)"
-          echo "📁 Artifact uploaded and available for download"
+          if [ "${{ needs.generate-repository-overview.result }}" = "success" ]; then
+            echo "## 📊 Repository Statistics" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Repositories** | ${{ needs.generate-repository-overview.outputs.total_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Sandbox APIs** | ${{ needs.generate-repository-overview.outputs.sandbox_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Incubating APIs** | ${{ needs.generate-repository-overview.outputs.incubating_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Working Groups** | ${{ needs.generate-repository-overview.outputs.working_group_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Other Repositories** | ${{ needs.generate-repository-overview.outputs.other_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Programming Languages** | ${{ needs.generate-repository-overview.outputs.total_languages }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Open Issues** | ${{ needs.generate-repository-overview.outputs.total_open_issues }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Open PRs** | ${{ needs.generate-repository-overview.outputs.total_open_prs }} |" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ needs.generate-repository-overview.outputs.archived_excluded }}" != "0" ]; then
+              echo "| **Archived (Excluded)** | ${{ needs.generate-repository-overview.outputs.archived_excluded }} |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            echo "## ⚙️ Analysis Configuration" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Detailed Activity Analysis**: ${{ needs.generate-repository-overview.outputs.detailed_activity_enabled == 'true' && '✅ Enabled' || '❌ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Template Compliance Checks**: ${{ needs.generate-repository-overview.outputs.template_compliance_enabled == 'true' && '✅ Enabled' || '❌ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ needs.generate-repository-overview.outputs.template_compliance_enabled }}" = "true" ] && [ "${{ needs.generate-repository-overview.outputs.total_api_repos }}" != "" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "## 📋 Template Compliance" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "- **API Repositories Analyzed**: ${{ needs.generate-repository-overview.outputs.total_api_repos }}" >> $GITHUB_STEP_SUMMARY
+              echo "- **Template Compliant**: ${{ needs.generate-repository-overview.outputs.compliant_repos }} ✅" >> $GITHUB_STEP_SUMMARY
+              echo "- **Compliance Rate**: ${{ needs.generate-repository-overview.outputs.compliance_rate }}%" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 📥 Download Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The complete detailed report is available in the **Artifacts** section below." >> $GITHUB_STEP_SUMMARY
+            echo "Look for: \`camara-repository-overview-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
+            
+          else
+            echo "## ❌ Workflow Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The repository overview workflow encountered an error." >> $GITHUB_STEP_SUMMARY
+            echo "Please check the workflow logs for detailed error information." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*CAMARA Repository Overview Workflow*" >> $GITHUB_STEP_SUMMARY
