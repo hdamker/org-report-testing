@@ -249,22 +249,32 @@ jobs:
             
             console.log('📋 Checking template compliance for API repositories...');
             
-            // Comprehensive template compliance verification
+            // Enhanced template compliance function with website validation
+            // Performs 9 comprehensive checks:
+            // 1. No "family" terms in description
+            // 2. Description format validation
+            // 3. Website URL format validation
+            // 4. Website exists and contains repository name in title
+            // 5. No "family" terms in README
+            // 6. Badge line (line 8)
+            // 7. Repository name header (line 10)
+            // 8. Descriptive line (line 12) 
+            // 9. Homepage link format (line 14)
             async function checkTemplateCompliance(repo, repoType) {
               const compliance = {
                 templateUsed: true,
                 violations: []
               };
               
-              // Only check API repositories (Sandbox/Incubating)
               if (!['Sandbox', 'Incubating'].includes(repoType)) {
                 return compliance;
               }
               
-              console.log(`🔍 Checking ${repo.name} (${repoType})`);
+              console.log('      🔍 Checking template compliance for ' + repo.name + ' (' + repoType + ')...');
+              
               const description = repo.description || '';
               
-              // Check 1: No "family" terms in description
+              // Check 1: Description should not contain "family" terms
               if (description.toLowerCase().includes('family')) {
                 compliance.violations.push({
                   check: 'Family terms in description',
@@ -273,25 +283,83 @@ jobs:
                 compliance.templateUsed = false;
               }
               
-              // Check 2: Description format validation
+              // Check 2: Description format
               if (!description.startsWith(repoType)) {
                 compliance.violations.push({
                   check: 'Description format',
-                  issue: `Repository description should start with "${repoType}". Current: "${description}"`
+                  issue: 'Repository description should start with "' + repoType + '". Current: "' + description + '"'
                 });
                 compliance.templateUsed = false;
               }
               
-              // Check 3: Website URL validation
+              // Check 3: Website URL format
               if (!repo.homepage || !repo.homepage.startsWith('https://lf-camaraproject.atlassian.net/')) {
                 compliance.violations.push({
-                  check: 'Website URL',
-                  issue: `Website should point to "https://lf-camaraproject.atlassian.net/". Current: "${repo.homepage || 'No website'}"`
+                  check: 'Website URL format',
+                  issue: 'Website should point to "https://lf-camaraproject.atlassian.net/". Current: "' + (repo.homepage || 'No website') + '"'
                 });
                 compliance.templateUsed = false;
               }
               
-              // Check 4-6: README content validation
+              // Check 4: Website exists and contains repository name in title
+              if (repo.homepage && repo.homepage.startsWith('https://lf-camaraproject.atlassian.net/')) {
+                try {
+                  console.log('        🌐 Validating website: ' + repo.homepage);
+                  
+                  // Make HTTP request to the website
+                  const response = await fetch(repo.homepage, {
+                    method: 'GET',
+                    headers: {
+                      'User-Agent': 'CAMARA-Template-Compliance-Check'
+                    },
+                    timeout: 10000
+                  });
+                  
+                  if (!response.ok) {
+                    compliance.violations.push({
+                      check: 'Website accessibility',
+                      issue: 'Website returns HTTP ' + response.status + '. The link may be broken or inaccessible.'
+                    });
+                    compliance.templateUsed = false;
+                  } else {
+                    // Parse HTML to extract title
+                    const html = await response.text();
+                    const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
+                    
+                    if (titleMatch) {
+                      const pageTitle = titleMatch[1].trim();
+                      console.log('        📄 Page title: "' + pageTitle + '"');
+                      
+                      // Check if repository name appears in title (case-insensitive)
+                      if (!pageTitle.toLowerCase().includes(repo.name.toLowerCase())) {
+                        compliance.violations.push({
+                          check: 'Repository name in website title',
+                          issue: 'Website title "' + pageTitle + '" should contain repository name "' + repo.name + '"'
+                        });
+                        compliance.templateUsed = false;
+                      } else {
+                        console.log('        ✅ Repository name "' + repo.name + '" found in website title');
+                      }
+                    } else {
+                      compliance.violations.push({
+                        check: 'Website title extraction',
+                        issue: 'Could not extract title from website HTML'
+                      });
+                      compliance.templateUsed = false;
+                    }
+                  }
+                  
+                } catch (error) {
+                  console.log('        ⚠️ Website validation failed: ' + error.message);
+                  compliance.violations.push({
+                    check: 'Website validation',
+                    issue: 'Could not validate website: ' + error.message
+                  });
+                  compliance.templateUsed = false;
+                }
+              }
+              
+              // Check 5-9: README checks (enhanced validation)
               try {
                 const readmeResponse = await github.rest.repos.getContent({
                   owner: org,
@@ -301,7 +369,7 @@ jobs:
                 const readmeContent = Buffer.from(readmeResponse.data.content, 'base64').toString('utf8');
                 const readmeLines = readmeContent.split('\n');
                 
-                // Check 4: No "family" terms in README
+                // Check 5: README should not contain "family" terms
                 if (readmeContent.toLowerCase().includes('family')) {
                   compliance.violations.push({
                     check: 'Family terms in README',
@@ -310,7 +378,7 @@ jobs:
                   compliance.templateUsed = false;
                 }
                 
-                // Check 5: Badge line verification (line 8)
+                // Check 6: Badge line verification (line 8)
                 const line8 = readmeLines.length >= 8 ? readmeLines[7].trim() : '';
                 const hasCorrectBadge = line8.includes('ProjectStructureAndRoles.md') && 
                                        line8.includes(repoType) && 
@@ -319,26 +387,65 @@ jobs:
                 if (!hasCorrectBadge) {
                   compliance.violations.push({
                     check: 'Badge line (line 8)',
-                    issue: `Line 8 of README.md should contain the ${repoType} API Repository badge`
+                    issue: 'Line 8 of README.md should contain the ' + repoType + ' API Repository badge'
                   });
                   compliance.templateUsed = false;
                 }
                 
-                // Check 6: Descriptive line validation
+                // Check 7: Repository name header (line 10)
+                const line10 = readmeLines.length >= 10 ? readmeLines[9].trim() : '';
+                const expectedHeader = '# ' + repo.name;
+                
+                if (line10 !== expectedHeader) {
+                  compliance.violations.push({
+                    check: 'Repository name header (line 10)',
+                    issue: 'Line 10 of README.md should contain exactly "' + expectedHeader + '". Current: "' + line10 + '"'
+                  });
+                  compliance.templateUsed = false;
+                }
+                
+                // Check 8: Descriptive line validation (line 12)
+                const line12 = readmeLines.length >= 12 ? readmeLines[11].trim() : '';
                 const expectedLineStart = repoType === 'Sandbox'
                   ? 'Sandbox API Repository to describe, develop, document, and test'
                   : 'Incubating API Repository to evolve and maintain the definitions and documentation';
                 
-                const hasExpectedLine = readmeLines.some(line => 
-                  line.trim().startsWith(expectedLineStart)
-                );
-                
-                if (!hasExpectedLine) {
+                if (!line12.startsWith(expectedLineStart)) {
                   compliance.violations.push({
-                    check: 'Descriptive line in README',
-                    issue: `README.md should contain a line starting with "${expectedLineStart}"`
+                    check: 'Descriptive line (line 12)',
+                    issue: 'Line 12 of README.md should start with "' + expectedLineStart + '". Current: "' + line12 + '"'
                   });
                   compliance.templateUsed = false;
+                }
+                
+                // Check 9: Homepage link validation (line 14)
+                const line14 = readmeLines.length >= 14 ? readmeLines[13].trim() : '';
+                
+                if (repo.homepage) {
+                  // Check if line 14 contains the homepage URL but not as a bare link
+                  const containsHomepage = line14.includes(repo.homepage);
+                  const isBareLink = line14.trim() === repo.homepage;
+                  const hasMarkdownLink = line14.includes('[') && line14.includes('](') && line14.includes(repo.homepage + ')');
+                  
+                  if (!containsHomepage) {
+                    compliance.violations.push({
+                      check: 'Homepage link (line 14)',
+                      issue: 'Line 14 of README.md should contain the homepage URL "' + repo.homepage + '". Current: "' + line14 + '"'
+                    });
+                    compliance.templateUsed = false;
+                  } else if (isBareLink) {
+                    compliance.violations.push({
+                      check: 'Homepage link format (line 14)',
+                      issue: 'Line 14 should not be a bare link. Use markdown format like "[Link Text](' + repo.homepage + ')". Current: "' + line14 + '"'
+                    });
+                    compliance.templateUsed = false;
+                  } else if (!hasMarkdownLink) {
+                    compliance.violations.push({
+                      check: 'Homepage link format (line 14)',
+                      issue: 'Line 14 should contain a properly formatted markdown link to "' + repo.homepage + '". Current: "' + line14 + '"'
+                    });
+                    compliance.templateUsed = false;
+                  }
                 }
                 
               } catch (readmeError) {
@@ -352,15 +459,16 @@ jobs:
               return compliance;
             }
             
-            // Process compliance checks for API repositories
+            // Check compliance for API repositories
             for (let i = 0; i < enrichedRepos.length; i++) {
               const repo = enrichedRepos[i];
               if (['Sandbox', 'Incubating'].includes(repo.repo_type)) {
+                console.log('📋 Checking compliance for ' + repo.name + ' (' + repo.repo_type + ')...');
                 enrichedRepos[i].template_compliance = await checkTemplateCompliance(repo, repo.repo_type);
                 
                 const passed = enrichedRepos[i].template_compliance.templateUsed;
                 const violations = enrichedRepos[i].template_compliance.violations.length;
-                console.log(`📊 ${repo.name}: ${passed ? '✅ PASSED' : '❌ FAILED'} (${violations} violations)`);
+                console.log('  📊 ' + repo.name + ': ' + (passed ? '✅ PASSED' : '❌ FAILED') + ' (' + violations + ' violations)');
               } else {
                 enrichedRepos[i].template_compliance = { templateUsed: true, violations: [] };
               }
@@ -442,7 +550,7 @@ jobs:
               report += `**Archived Repositories Excluded**: ${allReposCount - stats.total}\n`;
             }
             report += `**Detailed Activity Analysis**: ${detailedActivity ? 'Enabled' : 'Disabled (using repository updated_at)'}\n`;
-            report += `**Template Compliance Checks**: ${checkTemplateCompliance ? 'Enabled' : 'Disabled'}\n\n`;
+            report += `**Template Compliance Checks**: ${checkTemplateCompliance ? 'Enabled (9-point verification)' : 'Disabled'}\n\n`;
             
             // Repository Statistics Section
             report += '## Repository Statistics\n\n';
@@ -466,14 +574,25 @@ jobs:
               const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
               const nonCompliantRepos = apiRepos.filter(r => r.template_compliance && !r.template_compliance.templateUsed);
               
-              report += '## Template Compliance Analysis\n\n';
-              report += '*Analysis of repository compliance with CAMARA templates*\n\n';
+              report += '## Template Compliance Analysis (9-Point Verification)\n\n';
+              report += '*Enhanced analysis of repository compliance with CAMARA templates*\n\n';
               
               report += '### Summary\n';
               report += `- **Total API Repositories**: ${apiRepos.length}\n`;
               report += `- **Template Compliant**: ${compliantRepos.length} ✅\n`;
               report += `- **Template Non-Compliant**: ${nonCompliantRepos.length} ❌\n`;
               report += `- **Compliance Rate**: ${complianceStats.rate}%\n\n`;
+              
+              report += '### Compliance Checks Performed\n';
+              report += '1. ✅ No "family" terms in description\n';
+              report += '2. ✅ Description format validation\n';
+              report += '3. ✅ Website URL format validation\n';
+              report += '4. ✅ Website exists and contains repository name in title\n';
+              report += '5. ✅ No "family" terms in README\n';
+              report += '6. ✅ Badge line (line 8)\n';
+              report += '7. ✅ Repository name header (line 10)\n';
+              report += '8. ✅ Descriptive line (line 12)\n';
+              report += '9. ✅ Homepage link format (line 14)\n\n';
               
               if (compliantRepos.length > 0) {
                 report += '### ✅ Template Compliant Repositories\n\n';
@@ -694,15 +813,20 @@ jobs:
             echo "## ⚙️ Analysis Configuration" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "- **Detailed Activity Analysis**: ${{ needs.generate-repository-overview.outputs.detailed_activity_enabled == 'true' && '✅ Enabled' || '❌ Disabled' }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **Template Compliance Checks**: ${{ needs.generate-repository-overview.outputs.template_compliance_enabled == 'true' && '✅ Enabled' || '❌ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Template Compliance Checks**: ${{ needs.generate-repository-overview.outputs.template_compliance_enabled == 'true' && '✅ Enabled (9-point verification)' || '❌ Disabled' }}" >> $GITHUB_STEP_SUMMARY
             
             if [ "${{ needs.generate-repository-overview.outputs.template_compliance_enabled }}" = "true" ] && [ "${{ needs.generate-repository-overview.outputs.total_api_repos }}" != "" ]; then
               echo "" >> $GITHUB_STEP_SUMMARY
-              echo "## 📋 Template Compliance" >> $GITHUB_STEP_SUMMARY
+              echo "## 📋 Template Compliance (9-Point Verification)" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
               echo "- **API Repositories Analyzed**: ${{ needs.generate-repository-overview.outputs.total_api_repos }}" >> $GITHUB_STEP_SUMMARY
               echo "- **Template Compliant**: ${{ needs.generate-repository-overview.outputs.compliant_repos }} ✅" >> $GITHUB_STEP_SUMMARY
               echo "- **Compliance Rate**: ${{ needs.generate-repository-overview.outputs.compliance_rate }}%" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**Enhanced Checks Include:**" >> $GITHUB_STEP_SUMMARY
+              echo "- Website accessibility and repository name in title" >> $GITHUB_STEP_SUMMARY
+              echo "- Specific README line validation (8, 10, 12, 14)" >> $GITHUB_STEP_SUMMARY
+              echo "- Homepage link format validation" >> $GITHUB_STEP_SUMMARY
             fi
             
             echo "" >> $GITHUB_STEP_SUMMARY
