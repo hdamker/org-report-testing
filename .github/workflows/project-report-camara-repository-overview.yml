@@ -28,6 +28,21 @@ on:
 jobs:
   generate-repository-overview:
     runs-on: ubuntu-latest
+    outputs:
+      total_repos: ${{ steps.generate-report.outputs.total_repos }}
+      sandbox_repos: ${{ steps.generate-report.outputs.sandbox_repos }}
+      incubating_repos: ${{ steps.generate-report.outputs.incubating_repos }}
+      working_group_repos: ${{ steps.generate-report.outputs.working_group_repos }}
+      other_repos: ${{ steps.generate-report.outputs.other_repos }}
+      total_languages: ${{ steps.generate-report.outputs.total_languages }}
+      total_open_issues: ${{ steps.generate-report.outputs.total_open_issues }}
+      total_open_prs: ${{ steps.generate-report.outputs.total_open_prs }}
+      archived_excluded: ${{ steps.generate-report.outputs.archived_excluded }}
+      detailed_activity_enabled: ${{ steps.generate-report.outputs.detailed_activity_enabled }}
+      template_compliance_enabled: ${{ steps.generate-report.outputs.template_compliance_enabled }}
+      compliance_rate: ${{ steps.generate-report.outputs.compliance_rate }}
+      compliant_repos: ${{ steps.generate-report.outputs.compliant_repos }}
+      total_api_repos: ${{ steps.generate-report.outputs.total_api_repos }}
     steps:
       - name: Initialize Repository Overview Report
         id: initialize
@@ -381,18 +396,6 @@ jobs:
             
             console.log('📝 Step 3: Generating comprehensive report...');
             
-            // Generate report using string concatenation
-            let report = '# CAMARA Project Repository Overview\n\n';
-            report += '**Generated**: ' + new Date().toISOString() + '\n';
-            report += '**Organization**: ' + org + '\n';
-            report += '**Total Repositories**: ' + enrichedRepos.length + '\n';
-            if (!includeArchived && allReposCount) {
-              report += '**Archived Repositories Excluded**: ' + (allReposCount - enrichedRepos.length) + '\n';
-            }
-            report += '**Detailed Activity Analysis**: ' + (detailedActivity ? 'Enabled' : 'Disabled (using repository updated_at)') + '\n';
-            report += '**Template Compliance Checks**: ' + (checkTemplateCompliance ? 'Enabled' : 'Disabled') + '\n';
-            report += '\n';
-            
             // Repository type statistics
             const typeStats = {
               'Sandbox': enrichedRepos.filter(r => r.repo_type === 'Sandbox').length,
@@ -412,6 +415,50 @@ jobs:
               totalOpenPRs: enrichedRepos.reduce((acc, r) => acc + r.open_prs_count, 0)
             };
             
+            // Template compliance statistics (if enabled)
+            const apiRepos = enrichedRepos.filter(r => ['Sandbox', 'Incubating'].includes(r.repo_type));
+            let complianceStats = null;
+            if (checkTemplateCompliance && apiRepos.length > 0) {
+              const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
+              const nonCompliantRepos = apiRepos.filter(r => r.template_compliance && !r.template_compliance.templateUsed);
+              complianceStats = {
+                total: apiRepos.length,
+                compliant: compliantRepos.length,
+                nonCompliant: nonCompliantRepos.length,
+                rate: Math.round((compliantRepos.length / apiRepos.length) * 100)
+              };
+            }
+            
+            // Set outputs for summary job
+            core.setOutput('total_repos', stats.total);
+            core.setOutput('sandbox_repos', typeStats['Sandbox']);
+            core.setOutput('incubating_repos', typeStats['Incubating']);
+            core.setOutput('working_group_repos', typeStats['Working Group']);
+            core.setOutput('other_repos', typeStats['Other']);
+            core.setOutput('total_languages', stats.languages.length);
+            core.setOutput('total_open_issues', stats.totalOpenIssues);
+            core.setOutput('total_open_prs', stats.totalOpenPRs);
+            core.setOutput('archived_excluded', includeArchived ? 0 : (allReposCount - enrichedRepos.length));
+            core.setOutput('detailed_activity_enabled', detailedActivity);
+            core.setOutput('template_compliance_enabled', checkTemplateCompliance);
+            if (complianceStats) {
+              core.setOutput('compliance_rate', complianceStats.rate);
+              core.setOutput('compliant_repos', complianceStats.compliant);
+              core.setOutput('total_api_repos', complianceStats.total);
+            }
+            
+            // Generate report using string concatenation
+            let report = '# CAMARA Project Repository Overview\n\n';
+            report += '**Generated**: ' + new Date().toISOString() + '\n';
+            report += '**Organization**: ' + org + '\n';
+            report += '**Total Repositories**: ' + enrichedRepos.length + '\n';
+            if (!includeArchived && allReposCount) {
+              report += '**Archived Repositories Excluded**: ' + (allReposCount - enrichedRepos.length) + '\n';
+            }
+            report += '**Detailed Activity Analysis**: ' + (detailedActivity ? 'Enabled' : 'Disabled (using repository updated_at)') + '\n';
+            report += '**Template Compliance Checks**: ' + (checkTemplateCompliance ? 'Enabled' : 'Disabled') + '\n';
+            report += '\n';
+            
             report += '## Repository Statistics\n\n';
             report += '### General Statistics\n';
             report += '- **Total Repositories**: ' + stats.total + '\n';
@@ -429,7 +476,6 @@ jobs:
             report += '- **Other**: ' + typeStats['Other'] + '\n\n';
             
             // Template compliance analysis (only if enabled)
-            const apiRepos = enrichedRepos.filter(r => ['Sandbox', 'Incubating'].includes(r.repo_type));
             if (checkTemplateCompliance && apiRepos.length > 0) {
               const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
               const nonCompliantRepos = apiRepos.filter(r => r.template_compliance && !r.template_compliance.templateUsed);
@@ -608,14 +654,13 @@ jobs:
             
             console.log('✅ Repository overview report saved as ' + filename);
             console.log('📊 Final Report Statistics:');
-            console.log('  - Total repositories: ' + enrichedRepos.length);
+            console.log('  - Total repositories: ' + stats.total);
             console.log('  - Repository types: Sandbox:' + typeStats['Sandbox'] + ', Incubating:' + typeStats['Incubating'] + ', WorkingGroup:' + typeStats['Working Group'] + ', Other:' + typeStats['Other']);
             console.log('  - Total open issues: ' + stats.totalOpenIssues);
             console.log('  - Total open PRs: ' + stats.totalOpenPRs);
             console.log('  - Languages: ' + stats.languages.length);
-            if (checkTemplateCompliance && apiRepos.length > 0) {
-              const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
-              console.log('  - Template compliance: ' + compliantRepos.length + '/' + apiRepos.length + ' API repos compliant');
+            if (complianceStats) {
+              console.log('  - Template compliance: ' + complianceStats.compliant + '/' + complianceStats.total + ' API repos compliant (' + complianceStats.rate + '%)');
             }
             
             // Set output for artifact upload
@@ -636,13 +681,60 @@ jobs:
     needs: [generate-repository-overview]
     runs-on: ubuntu-latest
     steps:
-      - name: Report Summary
+      - name: Generate Workflow Summary
         run: |
-          echo "🎉 CAMARA Repository Overview Complete" >> $GITHUB_STEP_SUMMARY
+          echo "# 🎉 CAMARA Repository Overview Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Generated At**: $(date -u)" >> $GITHUB_STEP_SUMMARY
           echo "**Job Status**: ${{ needs.generate-repository-overview.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Download**: Check the artifacts section of this workflow run" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-          echo "✅ CAMARA repository overview workflow completed"
-          echo "📅 Completed at: $(date -u)"
-          echo "📁 Artifact uploaded and available for download"
+          if [ "${{ needs.generate-repository-overview.result }}" = "success" ]; then
+            echo "## 📊 Repository Statistics" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Repositories** | ${{ needs.generate-repository-overview.outputs.total_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Sandbox APIs** | ${{ needs.generate-repository-overview.outputs.sandbox_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Incubating APIs** | ${{ needs.generate-repository-overview.outputs.incubating_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Working Groups** | ${{ needs.generate-repository-overview.outputs.working_group_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Other Repositories** | ${{ needs.generate-repository-overview.outputs.other_repos }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Programming Languages** | ${{ needs.generate-repository-overview.outputs.total_languages }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Open Issues** | ${{ needs.generate-repository-overview.outputs.total_open_issues }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Total Open PRs** | ${{ needs.generate-repository-overview.outputs.total_open_prs }} |" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ needs.generate-repository-overview.outputs.archived_excluded }}" != "0" ]; then
+              echo "| **Archived (Excluded)** | ${{ needs.generate-repository-overview.outputs.archived_excluded }} |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            echo "## ⚙️ Analysis Configuration" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Detailed Activity Analysis**: ${{ needs.generate-repository-overview.outputs.detailed_activity_enabled == 'true' && '✅ Enabled' || '❌ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Template Compliance Checks**: ${{ needs.generate-repository-overview.outputs.template_compliance_enabled == 'true' && '✅ Enabled' || '❌ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ needs.generate-repository-overview.outputs.template_compliance_enabled }}" = "true" ] && [ "${{ needs.generate-repository-overview.outputs.total_api_repos }}" != "" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "## 📋 Template Compliance" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "- **API Repositories Analyzed**: ${{ needs.generate-repository-overview.outputs.total_api_repos }}" >> $GITHUB_STEP_SUMMARY
+              echo "- **Template Compliant**: ${{ needs.generate-repository-overview.outputs.compliant_repos }} ✅" >> $GITHUB_STEP_SUMMARY
+              echo "- **Compliance Rate**: ${{ needs.generate-repository-overview.outputs.compliance_rate }}%" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 📥 Download Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The complete detailed report is available in the **Artifacts** section below." >> $GITHUB_STEP_SUMMARY
+            echo "Look for: \`camara-repository-overview-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
+            
+          else
+            echo "## ❌ Workflow Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The repository overview workflow encountered an error." >> $GITHUB_STEP_SUMMARY
+            echo "Please check the workflow logs for detailed error information." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*CAMARA Repository Overview Workflow*" >> $GITHUB_STEP_SUMMARY
