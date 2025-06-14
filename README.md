@@ -11,7 +11,7 @@ Two specialized GitHub Actions workflows for comprehensive CAMARA project analys
 
 **Repository Overview:**
 - Repository health monitoring and statistics
-- Template compliance verification (6-point checks)
+- Enhanced template compliance verification (9-point checks with website validation)
 - Activity analysis and contribution metrics
 - Weekly automated reports with enhanced summaries
 

@@ -16,7 +16,7 @@ Two specialized GitHub Actions workflows provide comprehensive analysis for CAMA
 
 ### 🏢 Repository Overview Workflow
 - **Repository Health Monitoring** - Activity patterns, contribution statistics, project health
-- **Template Compliance Verification** - 6-point verification for API repositories
+- **Enhanced Template Compliance Verification** - 9-point verification for API repositories with website validation
 - **Organization-wide Statistics** - Complete overview by repository type
 - **Automated Scheduling** - Weekly reports with enhanced workflow summaries
 
@@ -107,9 +107,12 @@ Copy both workflow files to `.github/workflows/` in your repository:
 1. ✅ No "family" terms in description/README
 2. ✅ Description starts with repository type (Sandbox/Incubating)
 3. ✅ Website points to CAMARA Atlassian
-4. ✅ README line 8 contains correct badge
-5. ✅ README contains expected descriptive line
-6. ✅ README.md file exists
+4. ✅ **Website exists and contains repository name in title**
+5. ✅ No "family" terms in README content
+6. ✅ README line 8 contains correct badge
+7. ✅ **README line 10 contains repository name header (`# RepoName`)**
+8. ✅ **README line 12 contains expected descriptive line**
+9. ✅ **README line 14 contains homepage link in markdown format (not bare link)**
 
 ### API Releases Report
 
@@ -143,8 +146,9 @@ Copy both workflow files to `.github/workflows/` in your repository:
 
 **Performance Issues**
 - ✅ Repository Overview: Disable detailed activity/template compliance for faster runs
+- ✅ Template compliance with website validation may take longer due to HTTP requests
 - ✅ API Releases: Monitor logs for API rate limiting
-- ✅ Run during off-peak hours
+- ✅ Run during off-peak hours to avoid network congestion
 
 **Missing Data**
 - ✅ Repository Overview: Check if repositories are archived (excluded by default)
@@ -200,6 +204,9 @@ A: When you need precise activity dates. It analyzes actual commits/issues/PRs i
 
 **Q: What's the difference between meta-releases and patches?**
 A: Meta-releases (Fall24/Spring25/Fall25) are first releases in major versions. Patches are subsequent releases in the same major version.
+
+**Q: What if website validation fails but the link works in my browser?**
+A: Website validation may fail due to network timeouts, server issues, or access restrictions. Check the specific error message in the compliance report. The validation uses a 10-second timeout and requires the page title to contain the repository name.
 
 **Q: How does consistency analysis work?**
 A: Compares API versions between main branch and latest releases, checks that release descriptions mention API versions.
