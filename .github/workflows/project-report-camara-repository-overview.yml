@@ -393,12 +393,6 @@ jobs:
             report += '**Template Compliance Checks**: ' + (checkTemplateCompliance ? 'Enabled' : 'Disabled') + '\n';
             report += '\n';
             
-            // Executive Summary Table
-            report += '## Executive Summary\n\n';
-            report += '| Metric | Count | Details |\n';
-            report += '|--------|-------|----------|\n';
-            report += '| **Total Repositories** | ' + enrichedRepos.length + ' | ' + (includeArchived ? 'Including archived' : 'Excluding archived') + ' |\n';
-            
             // Repository type statistics
             const typeStats = {
               'Sandbox': enrichedRepos.filter(r => r.repo_type === 'Sandbox').length,
@@ -406,8 +400,6 @@ jobs:
               'Working Group': enrichedRepos.filter(r => r.repo_type === 'Working Group').length,
               'Other': enrichedRepos.filter(r => r.repo_type === 'Other').length
             };
-            
-            report += '| **Repository Types** | ' + Object.keys(typeStats).filter(k => typeStats[k] > 0).length + ' types | Sandbox: ' + typeStats['Sandbox'] + ', Incubating: ' + typeStats['Incubating'] + ', Working Group: ' + typeStats['Working Group'] + ', Other: ' + typeStats['Other'] + ' |\n';
             
             // General statistics
             const stats = {
@@ -419,41 +411,6 @@ jobs:
               totalOpenIssues: enrichedRepos.reduce((acc, r) => acc + r.open_issues_count, 0),
               totalOpenPRs: enrichedRepos.reduce((acc, r) => acc + r.open_prs_count, 0)
             };
-            
-            report += '| **Visibility** | ' + stats.public + ' public, ' + stats.private + ' private | ' + Math.round((stats.public / stats.total) * 100) + '% public |\n';
-            
-            if (stats.archived > 0) {
-              report += '| **Archived** | ' + stats.archived + ' | ' + Math.round((stats.archived / stats.total) * 100) + '% of analyzed repos |\n';
-            }
-            
-            report += '| **Programming Languages** | ' + stats.languages.length + ' | ' + (stats.languages.length > 5 ? stats.languages.slice(0, 5).join(', ') + '...' : stats.languages.join(', ')) + ' |\n';
-            report += '| **Open Issues** | ' + stats.totalOpenIssues + ' | Across all repositories |\n';
-            report += '| **Open Pull Requests** | ' + stats.totalOpenPRs + ' | Across all repositories |\n';
-            
-            // Template compliance summary (if enabled)
-            const apiRepos = enrichedRepos.filter(r => ['Sandbox', 'Incubating'].includes(r.repo_type));
-            if (checkTemplateCompliance && apiRepos.length > 0) {
-              const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
-              const complianceRate = Math.round((compliantRepos.length / apiRepos.length) * 100);
-              report += '| **Template Compliance** | ' + compliantRepos.length + '/' + apiRepos.length + ' API repos | ' + complianceRate + '% compliance rate |\n';
-            }
-            
-            // Recent activity summary
-            const recentlyActiveCount = enrichedRepos.filter(repo => {
-              const daysSinceActivity = (new Date() - new Date(repo.last_activity_date)) / (1000 * 60 * 60 * 24);
-              return daysSinceActivity <= 30;
-            }).length;
-            report += '| **Recent Activity (30 days)** | ' + recentlyActiveCount + ' repos | ' + Math.round((recentlyActiveCount / stats.total) * 100) + '% of repositories |\n';
-            
-            // Top starred repository
-            const topStarred = enrichedRepos.sort((a, b) => b.stargazers_count - a.stargazers_count)[0];
-            if (topStarred && topStarred.stargazers_count > 0) {
-              report += '| **Most Starred** | [' + topStarred.name + '](' + topStarred.html_url + ') | ' + topStarred.stargazers_count + ' stars (' + topStarred.repo_type + ') |\n';
-            }
-            
-            report += '\n';
-            
-            // Repository type statistics (already calculated above in summary)
             
             report += '## Repository Statistics\n\n';
             report += '### General Statistics\n';
@@ -472,6 +429,7 @@ jobs:
             report += '- **Other**: ' + typeStats['Other'] + '\n\n';
             
             // Template compliance analysis (only if enabled)
+            const apiRepos = enrichedRepos.filter(r => ['Sandbox', 'Incubating'].includes(r.repo_type));
             if (checkTemplateCompliance && apiRepos.length > 0) {
               const compliantRepos = apiRepos.filter(r => r.template_compliance && r.template_compliance.templateUsed);
               const nonCompliantRepos = apiRepos.filter(r => r.template_compliance && !r.template_compliance.templateUsed);
@@ -556,18 +514,18 @@ jobs:
               }
             }
             
-            // Top repositories by stars
-            const topStarred = enrichedRepos
+            // Top repositories by stars - FIXED: removed duplicate declaration
+            const starredRepos = enrichedRepos
               .sort((a, b) => b.stargazers_count - a.stargazers_count)
               .slice(0, 10)
               .filter(r => r.stargazers_count > 0);
             
-            if (topStarred.length > 0) {
+            if (starredRepos.length > 0) {
               report += '## Top Repositories by Stars\n\n';
               report += '| Repository | Type | Stars | Language | Open Issues | Open PRs |\n';
               report += '|------------|------|-------|----------|-------------|----------|\n';
               
-              for (const repo of topStarred) {
+              for (const repo of starredRepos) {
                 const language = repo.language || 'N/A';
                 report += '| [' + repo.name + '](' + repo.html_url + ') | ' + repo.repo_type + ' | ' + repo.stargazers_count + ' | ' + language + ' | ' + repo.open_issues_count + ' | ' + repo.open_prs_count + ' |\n';
               }
